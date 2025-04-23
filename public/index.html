@@ -1,0 +1,184 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Arm Control System</title>
+    <!-- Tailwind CSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'robot-purple': {
+                            50: '#f5f3ff',
+                            100: '#ede9fe',
+                            200: '#ddd6fe',
+                            300: '#c4b5fd',
+                            400: '#a78bfa',
+                            500: '#8b5cf6',
+                            600: '#7c3aed',
+                            700: '#6d28d9',
+                            800: '#5b21b6',
+                            900: '#4c1d95',
+                            950: '#2e1065',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 min-h-screen font-sans">
+    <div class="max-w-7xl mx-auto p-4">
+        <header class="mb-6">
+            <h1 class="text-3xl font-bold text-robot-purple-600 dark:text-robot-purple-400 text-center">
+                Robot Arm Control System
+            </h1>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- Camera Feed Panel -->
+            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg overflow-hidden">
+                <div class="flex justify-between items-center px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+                    <div class="flex items-center">
+                        <span id="cameraStatus" class="w-3 h-3 rounded-full bg-red-500 mr-2"></span>
+                        <h2 class="text-xl font-medium text-gray-800 dark:text-gray-200">Camera Feed</h2>
+                    </div>
+                    <div class="text-sm text-gray-600 dark:text-gray-400" id="cameraInfo">
+                        Waiting for camera...
+                    </div>
+                </div>
+                <div class="relative bg-black">
+                    <canvas id="videoFeed" width="640" height="480" class="w-full h-auto"></canvas>
+                    <div class="absolute top-0 left-0 w-full h-full pointer-events-none">
+                        <canvas id="detectionOverlay" width="640" height="480" class="w-full h-full"></canvas>
+                    </div>
+                </div>
+                <div class="px-6 py-4">
+                    <h3 class="text-lg font-medium text-robot-purple-600 dark:text-robot-purple-400 mb-2">AI Detection</h3>
+                    <div id="detectionInfo" class="text-gray-700 dark:text-gray-300">No objects detected</div>
+                </div>
+            </div>
+
+            <!-- Robot Control Panel -->
+            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg overflow-hidden">
+                <div class="flex justify-between items-center px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+                    <div class="flex items-center">
+                        <span id="robotStatus" class="w-3 h-3 rounded-full bg-red-500 mr-2"></span>
+                        <h2 class="text-xl font-medium text-gray-800 dark:text-gray-200">Robot Control</h2>
+                    </div>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 p-6">
+                    <!-- Servo Control -->
+                    <div>
+                        <h3 class="text-lg font-medium text-robot-purple-600 dark:text-robot-purple-400 mb-4">Servo Control</h3>
+                        <div class="space-y-4">
+                            <div class="flex items-center">
+                                <label for="servo0" class="w-24 text-gray-700 dark:text-gray-300 font-medium">Base:</label>
+                                <input type="range" id="servo0" min="0" max="180" value="90" 
+                                       class="flex-grow h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
+                                <span id="servo0Value" class="ml-4 text-gray-700 dark:text-gray-300 w-12 text-right">90°</span>
+                            </div>
+                            <div class="flex items-center">
+                                <label for="servo1" class="w-24 text-gray-700 dark:text-gray-300 font-medium">Shoulder:</label>
+                                <input type="range" id="servo1" min="0" max="180" value="90"
+                                       class="flex-grow h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
+                                <span id="servo1Value" class="ml-4 text-gray-700 dark:text-gray-300 w-12 text-right">90°</span>
+                            </div>
+                            <div class="flex items-center">
+                                <label for="servo2" class="w-24 text-gray-700 dark:text-gray-300 font-medium">Elbow:</label>
+                                <input type="range" id="servo2" min="0" max="180" value="90"
+                                       class="flex-grow h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
+                                <span id="servo2Value" class="ml-4 text-gray-700 dark:text-gray-300 w-12 text-right">90°</span>
+                            </div>
+                            <div class="flex items-center">
+                                <label for="servo3" class="w-24 text-gray-700 dark:text-gray-300 font-medium">Gripper:</label>
+                                <input type="range" id="servo3" min="0" max="180" value="90"
+                                       class="flex-grow h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
+                                <span id="servo3Value" class="ml-4 text-gray-700 dark:text-gray-300 w-12 text-right">90°</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Conveyor Control -->
+                    <div>
+                        <h3 class="text-lg font-medium text-robot-purple-600 dark:text-robot-purple-400 mb-4">Conveyor Control</h3>
+                        <div class="space-y-4">
+                            <div class="flex items-center">
+                                <label for="conveyorSpeed" class="w-20 text-gray-700 dark:text-gray-300 font-medium">Speed:</label>
+                                <input type="range" id="conveyorSpeed" min="0" max="255" value="0"
+                                       class="flex-grow h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
+                                <span id="conveyorSpeedValue" class="ml-4 text-gray-700 dark:text-gray-300 w-10 text-right">0</span>
+                            </div>
+                            <div class="flex space-x-2 mt-4">
+                                <button id="conveyorForward" 
+                                        class="bg-robot-purple-600 hover:bg-robot-purple-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">
+                                    Forward
+                                </button>
+                                <button id="conveyorReverse" 
+                                        class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">
+                                    Reverse
+                                </button>
+                                <button id="conveyorStop" 
+                                        class="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">
+                                    Stop
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Sequences -->
+                <div class="px-6 pb-4">
+                    <h3 class="text-lg font-medium text-robot-purple-600 dark:text-robot-purple-400 mb-4">Sequences</h3>
+                    <div class="flex flex-wrap gap-2">
+                        <button id="sequencePickPlace" 
+                                class="bg-robot-purple-600 hover:bg-robot-purple-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">
+                            Pick & Place
+                        </button>
+                        <button id="sequenceReset" 
+                                class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">
+                            Reset Position
+                        </button>
+                        <button id="sequenceIdentify" 
+                                class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">
+                            Sort Objects
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- AI Control -->
+                <div class="px-6 pb-6 border-t border-gray-200 dark:border-gray-700 pt-4">
+                    <h3 class="text-lg font-medium text-robot-purple-600 dark:text-robot-purple-400 mb-4">AI Control</h3>
+                    <div class="flex items-center">
+                        <button id="toggleAI" 
+                                class="bg-robot-purple-600 hover:bg-robot-purple-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">
+                            Enable AI Control
+                        </button>
+                        <span id="aiStatus" class="ml-4 text-gray-700 dark:text-gray-300">AI control is disabled</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- System Log Panel -->
+            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg overflow-hidden lg:col-span-2">
+                <div class="flex justify-between items-center px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+                    <h2 class="text-xl font-medium text-gray-800 dark:text-gray-200">System Log</h2>
+                    <button id="clearLog" 
+                            class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">
+                        Clear
+                    </button>
+                </div>
+                <div id="logContainer" class="h-64 overflow-y-auto p-4 font-mono text-sm"></div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Include the separate JavaScript file -->
+    <script src="./page.js"></script>
+</body>
+</html>

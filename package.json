@@ -1,27 +1,35 @@
 {
-  "name": "arm-robot-ui",
-  "version": "0.1.0",
-  "private": true,
+  "name": "arm-robot-iot",
+  "version": "1.0.0",
+  "description": "a smart arm robot cloud control system",
+
+  "main": "index.js",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "next": "15.1.7"
+
+    "axios": "^1.8.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "ejs": "^3.1.10",
+    "express": "^4.21.2",
+    "http": "^0.0.1-security",
+    "jimp": "^1.6.0",
+    "multer": "^1.4.5-lts.2",
+    "socket.io": "^4.8.1",
+    "ws": "^8.18.1"
   },
-  "devDependencies": {
-    "typescript": "^5",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "postcss": "^8",
-    "tailwindcss": "^3.4.1",
-    "eslint": "^9",
-    "eslint-config-next": "15.1.7",
-    "@eslint/eslintrc": "^3"
-  }
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Red-misst/arm-robot-iot.git"
+  },
+
+  "author": "Red Misst",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Red-misst/arm-robot-iot/issues"
+  },
+  "homepage": "https://github.com/Red-misst/arm-robot-iot#readme",
+  "type": "module"
 }
