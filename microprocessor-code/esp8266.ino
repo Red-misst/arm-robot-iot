@@ -21,8 +21,8 @@ const char* ssid = "YOUR_WIFI_SSID";
 const char* password = "YOUR_WIFI_PASSWORD";
 
 // WebSocket server details
-const char* webSocketHost = "192.168.1.100";  // Replace with your server IP
-const uint16_t webSocketPort = 8080;
+const char* webSocketHost = "000.000.0.000";  // Replace with your server IP
+const uint16_t webSocketPort = 0000;
 const char* webSocketPath = "/";
 
 // Globals
