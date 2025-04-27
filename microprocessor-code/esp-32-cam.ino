@@ -3,12 +3,12 @@
 #include <WebSocketsClient.h>
 
 // Wi-Fi credentials
-const char* ssid = "Tenda_5C30C8";
-const char* password = "op898989..";
+const char* ssid = //your wifi ssid
+const char* password = //your wifi password
 
 // WebSocket server
-const char* ws_server_ip = "192.168.0.109";
-const uint16_t ws_server_port = 443;
+const char* ws_server_ip = "000.000.0.000";
+const uint16_t ws_server_port = 3000;
 const char* ws_path = "/?type=camera";
 
 const char* camera_id = "camera1";
