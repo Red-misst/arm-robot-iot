@@ -151,43 +151,43 @@ The system implements a **publish-subscribe messaging pattern** with real-time e
 
 ```mermaid
 flowchart TD
-    subgraph DataSources ["Data Sources"]
-        CameraSensor["ESP32-CAM<br/>JPEG Frames<br/>60 FPS"]
-        ConveyorSensor["Belt Encoder<br/>Position Data<br/>100 Hz"]
-        RobotSensor["Servo Feedback<br/>Joint Positions<br/>50 Hz"]
+    subgraph DS ["Data Sources"]
+        CAM["ESP32-CAM<br/>JPEG Frames"]
+        CONV["Belt Encoder<br/>Position Data"]
+        ROBOT["Servo Feedback<br/>Joint Positions"]
     end
     
-    subgraph MessageBroker ["Message Broker"]
-        WSServer["WebSocket Server<br/>Message Routing<br/>Event Dispatching"]
+    subgraph MB ["Message Broker"]
+        WS["WebSocket Server<br/>Message Routing"]
     end
     
-    subgraph ProcessingEngines ["Processing Engines"]
-        VisionAI["Computer Vision<br/>Object Detection<br/>~10 FPS Processing"]
-        MotionControl["Motion Controller<br/>Trajectory Planning<br/>Real-time Control"]
-        ConveyorControl["Belt Controller<br/>Speed Regulation<br/>Position Tracking"]
+    subgraph PE ["Processing Engines"]
+        AI["Computer Vision<br/>Object Detection"]
+        MC["Motion Controller<br/>Trajectory Planning"]
+        BC["Belt Controller<br/>Speed Regulation"]
     end
     
-    subgraph DataConsumers ["Data Consumers"]
-        WebInterface["User Interface<br/>Live Monitoring<br/>Control Commands"]
-        DataStorage["Logging System<br/>Performance Metrics<br/>Historical Data"]
-        AlertSystem["Alert Manager<br/>Fault Detection<br/>Notifications"]
+    subgraph DC ["Data Consumers"]
+        UI["User Interface<br/>Live Monitoring"]
+        DB["Logging System<br/>Performance Metrics"]
+        ALERT["Alert Manager<br/>Fault Detection"]
     end
     
-    CameraSensor -->|Binary Frames| WSServer
-    ConveyorSensor -->|JSON Status| WSServer
-    RobotSensor -->|JSON Position| WSServer
+    CAM --> WS
+    CONV --> WS
+    ROBOT --> WS
     
-    WSServer -->|Frame Data| VisionAI
-    WSServer -->|Control Commands| MotionControl
-    WSServer -->|Speed Commands| ConveyorControl
+    WS --> AI
+    WS --> MC
+    WS --> BC
     
-    VisionAI -->|Detection Results| WSServer
-    MotionControl -->|Robot Status| WSServer
-    ConveyorControl -->|Belt Status| WSServer
+    AI --> WS
+    MC --> WS
+    BC --> WS
     
-    WSServer -->|Real-time Data| WebInterface
-    WSServer -->|All Events| DataStorage
-    WSServer -->|Fault Conditions| AlertSystem
+    WS --> UI
+    WS --> DB
+    WS --> ALERT
 ```
 
 ## 5. System Components in Detail
