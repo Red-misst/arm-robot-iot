@@ -5,7 +5,10 @@
 
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "monitor": "node --inspect index.js"
   },
   "dependencies": {
 
@@ -19,6 +22,9 @@
     "multer": "^1.4.5-lts.2",
     "socket.io": "^4.8.1",
     "ws": "^8.18.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.0"
   },
   "repository": {
     "type": "git",
