@@ -434,11 +434,11 @@ def inverse_kinematics(target_x, target_y, target_z):
 **Sorting Algorithm:**
 ```mermaid
 flowchart TD
-    Start["Object Detected"] --> Analysis{"Analyze Object"}
-    Analysis -->|Red Detected| RedBin["Move to Red Bin<br/>Angle = 180°"]
-    Analysis -->|Green Detected| GreenBin["Move to Green Bin<br/>Angle = 90°"]
-    Analysis -->|Blue Detected| BlueBin["Move to Blue Bin<br/>Angle = 0°"]
-    Analysis -->|Unknown| DefaultBin["Move to Default Bin<br/>Angle = 45°"]
+    Start(["Object Detected"]) --> Analysis{"Analyze Object"}
+    Analysis -->|Red Detected| RedBin["Move to Red Bin<br/>θ₁ = 180°"]
+    Analysis -->|Green Detected| GreenBin["Move to Green Bin<br/>θ₁ = 90°"]
+    Analysis -->|Blue Detected| BlueBin["Move to Blue Bin<br/>θ₁ = 0°"]
+    Analysis -->|Unknown| DefaultBin["Move to Default Bin<br/>θ₁ = 45°"]
     
     RedBin --> Pickup["Execute Pickup Sequence"]
     GreenBin --> Pickup
@@ -447,7 +447,7 @@ flowchart TD
     
     Pickup --> Place["Place in Bin"]
     Place --> Return["Return to Home Position"]
-    Return --> Ready["Ready for Next Object"]
+    Return --> Ready(["Ready for Next Object"])
 ```
 
 **Movement Sequences:**
