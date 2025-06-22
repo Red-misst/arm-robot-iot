@@ -3,26 +3,26 @@
 ```mermaid
 graph TB
     subgraph Physical["Physical Layer"]
-        ConveyorMotor["Conveyor Motor<br/>DC Motor + Encoder"]
+        StepperMotor["Stepper Motor<br/>28BYJ-48 + ULN2003"]
         ConveyorBelt["Conveyor Belt System"]
         Objects["Objects on Belt"]
         ESP32CAM["ESP32-CAM Vision Sensor"]
-        RoboticArm["4-DOF Robotic Arm"]
+        RoboticArm["4-DOF Robotic Arm<br/>3 Predefined Positions"]
         SortingBins["Sorting Bins<br/>Red Green Blue"]
         
         Objects --> ConveyorBelt
-        ConveyorMotor --> ConveyorBelt
+        StepperMotor --> ConveyorBelt
         ConveyorBelt --> ESP32CAM
         ESP32CAM -.-> Objects
         RoboticArm --> SortingBins
     end
     
     subgraph Edge["Edge Computing Layer"]
-        ESP8266["ESP8266 Controller"]
+        ESP8266["ESP8266 Controller<br/>Position Templates"]
         CameraStream["Video Stream<br/>60 FPS"]
         
         ESP32CAM --> CameraStream
-        ESP8266 --> ConveyorMotor
+        ESP8266 --> StepperMotor
         ESP8266 --> RoboticArm
     end
     
@@ -36,13 +36,13 @@ graph TB
     
     subgraph Processing["Processing Layer"]
         AIVision["Python AI Vision Engine<br/>YOLOv8 + OpenCV"]
-        DecisionEngine["Sorting Decision Logic"]
-        TrajectoryPlanner["Robot Path Planning"]
+        DecisionEngine["Color-Based Sorting Logic"]
+        PositionTemplates["Arm Position Templates<br/>Rest, Pickup, Color Bins"]
         
         WebSocketServer --> AIVision
         AIVision --> DecisionEngine
-        DecisionEngine --> TrajectoryPlanner
-        TrajectoryPlanner --> WebSocketServer
+        DecisionEngine --> PositionTemplates
+        PositionTemplates --> WebSocketServer
     end
     
     subgraph Application["Application Layer"]

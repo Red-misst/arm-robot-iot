@@ -140,8 +140,7 @@ const handleMessage = (message, sender, senderType) => {
         clients.ai.send(JSON.stringify(data));
       }
     }
-    
-    // Handle AI detection results
+      // Handle AI detection results
     if (senderType === 'ai' && data.type === 'detection') {
       console.log(`Received AI detection: ${data.detections.length} objects`);
       console.log(`Detection data sample:`, JSON.stringify(data.detections[0] || {}));
@@ -149,14 +148,8 @@ const handleMessage = (message, sender, senderType) => {
       // Forward detection results to UI clients
       broadcastToUI(data);
       
-      // If AI control is enabled, forward to robot
-      if (aiControlEnabled && clients.robot && clients.robot.readyState === WebSocket.OPEN) {
-        clients.robot.send(JSON.stringify({
-          type: 'ai_detection',
-          detections: data.detections,
-          timestamp: data.timestamp
-        }));
-      }
+      // Send detection to robot for sorting action
+      sendDetectionToRobot(data);
     }
     
     // Handle AI control messages
@@ -210,6 +203,33 @@ const broadcastToUI = message => {
   // Log only for binary messages to avoid console spam
   if (message instanceof Buffer) {
     console.log(`Broadcasted ${message.length} bytes to ${sentCount}/${clients.ui.length} UI clients`);
+  }
+};
+
+// Helper function to send detection results to robot
+const sendDetectionToRobot = (detectionData) => {
+  if (clients.robot && clients.robot.readyState === WebSocket.OPEN) {
+    // Extract dominant color from detection data
+    let dominantColor = 'unknown';
+    if (detectionData.detections && detectionData.detections.length > 0) {
+      const detection = detectionData.detections[0];
+      if (detection.color) {
+        dominantColor = detection.color.toLowerCase();
+      }
+    }
+    
+    const robotMessage = {
+      detection: {
+        color: dominantColor,
+        confidence: detectionData.detections?.[0]?.confidence || 0,
+        timestamp: new Date().toISOString()
+      }
+    };
+    
+    clients.robot.send(JSON.stringify(robotMessage));
+    console.log(`Sent detection to robot: ${dominantColor}`);
+  } else {
+    console.log("Robot not connected, cannot send detection");
   }
 };
 

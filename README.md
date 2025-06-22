@@ -28,7 +28,7 @@ This project employs a **systems engineering approach** combining:
 | Component         | Technical Specifications | Function & Implementation |
 |------------------|--------------------------|---------------------------|
 | **ESP32-CAM**    | OV2640 2MP Camera, 802.11 b/g/n WiFi, 240MHz Dual-Core CPU, 520KB SRAM | Captures images at 60 FPS with 352×288 resolution for real-time object detection. Implements JPEG compression and streams binary data via WebSocket protocol. Features automatic exposure control and configurable frame rates. |
-| **Conveyor Belt System** | DC Motor with Encoder, PWM Speed Control (0-255), Load Capacity: 2kg, Belt Length: 1.2m, Speed Range: 0.1-2.0 m/s | **Critical Component**: Provides continuous material handling and object transportation. Features variable speed control via PWM signals, position feedback through rotary encoders, and integrated object detection sensors. Implements acceleration/deceleration profiles for smooth operation and precise object positioning at pickup zones. |
+| **Conveyor Belt System** | Stepper Motor 28BYJ-48 + ULN2003 Driver, Steps: 2048/revolution, Load Capacity: 2kg, Belt Length: 1.2m, Speed Range: 5-50 steps/sec | **Critical Component**: Provides precise material handling and object positioning using stepper motor control. Features step-by-step positioning control, accurate object placement at pickup zones, and variable speed control. Implements acceleration/deceleration profiles for smooth operation and eliminates the need for encoder feedback through inherent step counting. |
 | **Robotic Arm** | 4-DOF Serial Manipulator, Reach: 400mm, Payload: 500g, Repeatability: ±2mm | 4-degree-of-freedom articulated arm with servo-driven joints for precise object manipulation. Implements forward and inverse kinematics calculations for trajectory planning and end-effector positioning. |
 | **Servo Motors** | SG90/MG996R Digital Servos, Torque: 1.8-10 kg⋅cm, Resolution: 0.5°, Control: PWM (50Hz) | Four precision servos control base rotation (0-180°), shoulder joint (-90° to 90°), elbow joint (0-180°), and gripper mechanism (0-90°). Each servo features closed-loop position control with feedback. |
 | **Gripper System** | Parallel Jaw Gripper, Opening: 0-50mm, Grip Force: 5N, Servo-Actuated | Custom-designed gripper with force-sensitive feedback for gentle object handling. Implements adaptive gripping based on object size detection from computer vision system. |
@@ -435,10 +435,10 @@ def inverse_kinematics(target_x, target_y, target_z):
 ```mermaid
 flowchart TD
     Start(["Object Detected"]) --> Analysis{"Analyze Object"}
-    Analysis -->|Red Detected| RedBin["Move to Red Bin<br/>θ₁ = 180°"]
+    Analysis -->|Red Detected| RedBin["Move to Red Bin<br/>θ₁ = 45°"]
     Analysis -->|Green Detected| GreenBin["Move to Green Bin<br/>θ₁ = 90°"]
-    Analysis -->|Blue Detected| BlueBin["Move to Blue Bin<br/>θ₁ = 0°"]
-    Analysis -->|Unknown| DefaultBin["Move to Default Bin<br/>θ₁ = 45°"]
+    Analysis -->|Blue Detected| BlueBin["Move to Blue Bin<br/>θ₁ = 135°"]
+    Analysis -->|Unknown| DefaultBin["Move to Default Bin<br/>θ₁ = 90°"]
     
     RedBin --> Pickup["Execute Pickup Sequence"]
     GreenBin --> Pickup
@@ -446,16 +446,41 @@ flowchart TD
     DefaultBin --> Pickup
     
     Pickup --> Place["Place in Bin"]
-    Place --> Return["Return to Home Position"]
+    Place --> Return["Return to Rest Position"]
     Return --> Ready(["Ready for Next Object"])
 ```
 
 **Movement Sequences:**
-1. **Home Position**: All joints at neutral position for camera visibility
-2. **Approach**: Move to pre-pickup position above object
-3. **Pickup**: Descend, close gripper, verify grip, ascend
-4. **Transport**: Move to appropriate sorting bin location
-5. **Release**: Open gripper, confirm object drop, return to home
+1. **Rest Position**: All joints at neutral position for camera visibility
+2. **Pickup**: Move to pre-pickup position above object with gripper open
+3. **Grab**: Close gripper and lift object to transport height
+4. **Sort**: Move to appropriate sorting bin location based on detected color
+5. **Release**: Open gripper, confirm object drop, return to rest position
+
+#### 5.5.4 Predefined Arm Positions
+The robotic arm system utilizes **three predefined position templates** stored in the ESP8266 controller for consistent and reliable operation:
+
+**Position Templates:**
+```cpp
+// Rest Position - Safe home position
+ArmPosition restPosition = {90, 90, 45, 0};
+// Base: 90° (center), Shoulder: 90° (horizontal), Elbow: 45° (up), Gripper: 0° (open)
+
+// Pickup Position - Object acquisition stance  
+ArmPosition pickupPosition = {90, 60, 120, 0};
+// Base: 90° (center), Shoulder: 60° (down), Elbow: 120° (extended), Gripper: 0° (open)
+
+// Sorting Positions - Color-based bin targeting
+ArmPosition redBinPosition = {45, 90, 90, 180};    // Left bin
+ArmPosition greenBinPosition = {90, 90, 90, 180};  // Center bin  
+ArmPosition blueBinPosition = {135, 90, 90, 180};  // Right bin
+```
+
+**Position Control Features:**
+- **Template-Based Movement**: Pre-calculated joint angles for consistent positioning
+- **Smooth Transitions**: Interpolated movement between positions with controlled acceleration
+- **Collision Avoidance**: Safe trajectories that avoid belt and bin obstacles
+- **Grip State Management**: Automatic gripper control integrated with position templates
 
 ### 5.6 User Interface
 The HTML/JavaScript interface provides monitoring and control capabilities:
@@ -488,15 +513,15 @@ stateDiagram-v2
     
     Analysis --> Rejection : Unrecognized Object
     Rejection --> Standby : Continue Operation
-    
-    note right of Positioning
-        Precise belt positioning
-        ±5mm accuracy
-        0.1 m/s speed
+      note right of Positioning
+        Precise stepper positioning
+        ±1 step accuracy (~0.18°)
+        5-50 steps/second speed
     end note
     
     note right of Pickup
-        4-DOF arm movement
+        Template-based movement
+        3 predefined positions
         2-4 second cycle time
         500g payload capacity
     end note
@@ -516,10 +541,10 @@ stateDiagram-v2
 |----------------|---------------|------------|
 | Object Detection | 0.1-0.2 | 5% |
 | AI Processing | 0.3-0.5 | 12% |
-| Belt Positioning | 0.8-1.2 | 25% |
-| Robot Pickup | 1.5-2.0 | 45% |
-| Transport & Place | 0.8-1.0 | 23% |
-| **Total Cycle** | **3.5-4.9** | **100%** |
+| Stepper Positioning | 0.5-0.8 | 18% |
+| Template Movement | 1.2-1.8 | 45% |
+| Transport & Place | 0.6-0.8 | 20% |
+| **Total Cycle** | **2.7-4.1** | **100%** |
 
 #### 6.2.2 Accuracy and Reliability
 **Detection Accuracy:**
