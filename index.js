@@ -17,6 +17,11 @@ const server = http.createServer(app);
 // Serve static files from the public directory
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Default route - serve dashboard
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
+});
+
 // Initialize WebSocket server
 const wss = new WebSocketServer({ server });
 
