@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -35,8 +34,11 @@
     <div class="max-w-7xl mx-auto p-4">
         <header class="mb-6">
             <h1 class="text-3xl font-bold text-robot-purple-600 dark:text-robot-purple-400 text-center">
-                Robot Arm Control System
+                Robot Arm Sorting System
             </h1>
+            <p class="text-center text-gray-600 dark:text-gray-400 mt-2">
+                AI-Powered Object Sorting with Manual Placement
+            </p>
         </header>
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -60,6 +62,9 @@
                 <div class="px-6 py-4">
                     <h3 class="text-lg font-medium text-robot-purple-600 dark:text-robot-purple-400 mb-2">AI Detection</h3>
                     <div id="detectionInfo" class="text-gray-700 dark:text-gray-300">No objects detected</div>
+                    <div class="mt-2 text-sm text-gray-500 dark:text-gray-400">
+                        Place objects in the camera view for AI color detection
+                    </div>
                 </div>
             </div>
 
@@ -71,11 +76,50 @@
                         <h2 class="text-xl font-medium text-gray-800 dark:text-gray-200">Robot Control</h2>
                     </div>
                 </div>
-                
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 p-6">
+
+                <!-- Position Templates -->
+                <div class="px-6 pt-4 pb-2">
+                    <h3 class="text-lg font-medium text-robot-purple-600 dark:text-robot-purple-400 mb-2">Arm Position Templates</h3>
+                    <div class="flex flex-wrap gap-2 mb-2">
+                        <button id="namedPosRest" class="bg-indigo-500 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">Rest</button>
+                        <button id="namedPosCenter" class="bg-amber-500 hover:bg-amber-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">Center</button>
+                        <button id="namedPosRed" class="bg-red-500 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">Red Bin</button>
+                        <button id="namedPosGreen" class="bg-green-500 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">Green Bin</button>
+                        <button id="namedPosBlue" class="bg-blue-500 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">Blue Bin</button>
+                    </div>
+                </div>
+
+                <!-- Real-Time Status Panel -->
+                <div class="px-6 pb-2">
+                    <div class="grid grid-cols-2 gap-4 mb-2">
+                        <div>
+                            <h4 class="text-sm font-semibold text-gray-500 dark:text-gray-300 mb-1">Joint Angles</h4>
+                            <ul class="text-xs text-gray-700 dark:text-gray-200 space-y-1">
+                                <li>Base: <span id="jointBase">90°</span></li>
+                                <li>Shoulder: <span id="jointShoulder">90°</span></li>
+                                <li>Elbow: <span id="jointElbow">45°</span></li>
+                                <li>Gripper: <span id="jointGripper">0°</span></li>
+                            </ul>
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-semibold text-gray-500 dark:text-gray-300 mb-1">Sorting Stats</h4>
+                            <ul class="text-xs text-gray-700 dark:text-gray-200 space-y-1">
+                                <li>Objects Sorted: <span id="objectsSorted">0</span></li>
+                                <li>Last Color: <span id="lastColor">None</span></li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="flex items-center mt-2">
+                        <span class="text-xs text-gray-500 mr-2">Last Detected Color:</span>
+                        <span id="lastDetectedColor" class="inline-block w-4 h-4 rounded-full border border-gray-300 bg-gray-200"></span>
+                        <span id="lastDetectedColorLabel" class="ml-2 text-xs text-gray-700 dark:text-gray-200">None</span>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 p-6">
                     <!-- Servo Control -->
                     <div>
-                        <h3 class="text-lg font-medium text-robot-purple-600 dark:text-robot-purple-400 mb-4">Servo Control</h3>
+                        <h3 class="text-lg font-medium text-robot-purple-600 dark:text-robot-purple-400 mb-4">Manual Servo Control</h3>
                         <div class="space-y-4">
                             <div class="flex items-center">
                                 <label for="servo0" class="w-24 text-gray-700 dark:text-gray-300 font-medium">Base:</label>
@@ -91,62 +135,35 @@
                             </div>
                             <div class="flex items-center">
                                 <label for="servo2" class="w-24 text-gray-700 dark:text-gray-300 font-medium">Elbow:</label>
-                                <input type="range" id="servo2" min="0" max="180" value="90"
+                                <input type="range" id="servo2" min="0" max="180" value="45"
                                        class="flex-grow h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
-                                <span id="servo2Value" class="ml-4 text-gray-700 dark:text-gray-300 w-12 text-right">90°</span>
+                                <span id="servo2Value" class="ml-4 text-gray-700 dark:text-gray-300 w-12 text-right">45°</span>
                             </div>
                             <div class="flex items-center">
                                 <label for="servo3" class="w-24 text-gray-700 dark:text-gray-300 font-medium">Gripper:</label>
-                                <input type="range" id="servo3" min="0" max="180" value="90"
+                                <input type="range" id="servo3" min="0" max="180" value="0"
                                        class="flex-grow h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
-                                <span id="servo3Value" class="ml-4 text-gray-700 dark:text-gray-300 w-12 text-right">90°</span>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- Conveyor Control -->
-                    <div>
-                        <h3 class="text-lg font-medium text-robot-purple-600 dark:text-robot-purple-400 mb-4">Conveyor Control</h3>
-                        <div class="space-y-4">
-                            <div class="flex items-center">
-                                <label for="conveyorSpeed" class="w-20 text-gray-700 dark:text-gray-300 font-medium">Speed:</label>
-                                <input type="range" id="conveyorSpeed" min="0" max="255" value="0"
-                                       class="flex-grow h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
-                                <span id="conveyorSpeedValue" class="ml-4 text-gray-700 dark:text-gray-300 w-10 text-right">0</span>
-                            </div>
-                            <div class="flex space-x-2 mt-4">
-                                <button id="conveyorForward" 
-                                        class="bg-robot-purple-600 hover:bg-robot-purple-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">
-                                    Forward
-                                </button>
-                                <button id="conveyorReverse" 
-                                        class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">
-                                    Reverse
-                                </button>
-                                <button id="conveyorStop" 
-                                        class="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">
-                                    Stop
-                                </button>
+                                <span id="servo3Value" class="ml-4 text-gray-700 dark:text-gray-300 w-12 text-right">0°</span>
                             </div>
                         </div>
                     </div>
                 </div>
                 
-                <!-- Sequences -->
+                <!-- Sorting Actions -->
                 <div class="px-6 pb-4">
-                    <h3 class="text-lg font-medium text-robot-purple-600 dark:text-robot-purple-400 mb-4">Sequences</h3>
+                    <h3 class="text-lg font-medium text-robot-purple-600 dark:text-robot-purple-400 mb-4">Sorting Actions</h3>
                     <div class="flex flex-wrap gap-2">
-                        <button id="sequencePickPlace" 
+                        <button id="sequenceSort" 
                                 class="bg-robot-purple-600 hover:bg-robot-purple-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">
-                            Pick & Place
+                            Sort Detected Object
                         </button>
                         <button id="sequenceReset" 
                                 class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">
                             Reset Position
                         </button>
-                        <button id="sequenceIdentify" 
-                                class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">
-                            Sort Objects
+                        <button id="sequenceDemo" 
+                                class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">
+                            Demo Sequence
                         </button>
                     </div>
                 </div>
@@ -160,6 +177,9 @@
                             Enable AI Control
                         </button>
                         <span id="aiStatus" class="ml-4 text-gray-700 dark:text-gray-300">AI control is disabled</span>
+                    </div>
+                    <div class="mt-2 text-sm text-gray-500 dark:text-gray-400">
+                        When enabled, the arm will automatically sort objects placed in the center area
                     </div>
                 </div>
             </div>
@@ -178,7 +198,7 @@
         </div>
     </div>
     
-    <!-- Include the separate JavaScript file -->
+    <!-- Include the updated JavaScript file -->
     <script src="./page.js"></script>
 </body>
 </html>

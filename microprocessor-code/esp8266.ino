@@ -3,7 +3,6 @@
 #include <ESP8266WiFi.h>
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
-#include <Stepper.h>
 
 // PCA9685 servo driver setup
 Adafruit_PWMServoDriver pca9685 = Adafruit_PWMServoDriver(0x40);
@@ -11,14 +10,6 @@ Adafruit_PWMServoDriver pca9685 = Adafruit_PWMServoDriver(0x40);
 #define SERVO_MIN  150  // Minimum pulse length
 #define SERVO_MAX  600  // Maximum pulse length
 #define STEP_DELAY 10   // Delay for smooth movement
-
-// Stepper Motor Configuration for Conveyor Belt
-#define STEPS_PER_REVOLUTION 2048  // 28BYJ-48 stepper motor
-#define STEPPER_PIN1 D1   // IN1
-#define STEPPER_PIN2 D2   // IN2  
-#define STEPPER_PIN3 D3   // IN3
-#define STEPPER_PIN4 D4   // IN4
-Stepper conveyorStepper(STEPS_PER_REVOLUTION, STEPPER_PIN1, STEPPER_PIN3, STEPPER_PIN2, STEPPER_PIN4);
 
 // Arm Position Definitions
 struct ArmPosition {
@@ -29,83 +20,70 @@ struct ArmPosition {
 };
 
 // Predefined arm positions
-ArmPosition restPosition = {90, 90, 45, 0};      // Home/rest position
-ArmPosition pickupPosition = {90, 60, 120, 0};   // Position for picking up objects
-ArmPosition redBinPosition = {45, 90, 90, 180};  // Red bin sorting position
-ArmPosition greenBinPosition = {90, 90, 90, 180}; // Green bin sorting position  
-ArmPosition blueBinPosition = {135, 90, 90, 180}; // Blue bin sorting position
+ArmPosition restPosition = {90, 90, 45, 0};
+ArmPosition pickupPosition = {90, 60, 120, 0};
+ArmPosition redBinPosition = {45, 90, 90, 180};
+ArmPosition greenBinPosition = {90, 90, 90, 180};
+ArmPosition blueBinPosition = {135, 90, 90, 180};
 
-// WiFi credentials
-const char* ssid = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASSWORD";
+// Wi-Fi credentials
+const char* ssid = "Tenda_5C30C8";
+const char* password = "op898989..";
 
 // WebSocket server details
-const char* webSocketHost = "192.168.1.100";  // Replace with your server IP
+const char* webSocketHost = "192.168.0.109";
 const uint16_t webSocketPort = 3000;
 const char* webSocketPath = "/?type=robot";
 
+// Define ESP8266 pins for I2C
+#define SDA_PIN 4  // GPIO4 (D2 on NodeMCU)
+#define SCL_PIN 5  // GPIO5 (D1 on NodeMCU)
+// Connection management
+#define CONNECTION_CHECK_INTERVAL 5000    // Check connection every 5 seconds
+#define HEARTBEAT_INTERVAL 15000          // Send heartbeat every 15 seconds
+#define MAX_RECONNECT_ATTEMPTS 10         // Maximum reconnection attempts before resetting
+unsigned long lastConnectionCheck = 0;
+unsigned long lastHeartbeat = 0;
+int reconnectAttempts = 0;
+bool isConnected = false;
+
 // Globals
 WebSocketsClient webSocket;
-ArmPosition currentPosition = restPosition;  // Current arm position
-bool conveyorRunning = false;
-int conveyorStepsPerSecond = 10;  // Stepper motor speed
-int conveyorDirection = 1;  // 1=forward, -1=reverse
-String lastDetectedColor = "";  // Store last detected object color
+ArmPosition currentPosition = restPosition;
+String lastDetectedColor = "";
 
 // Move servo smoothly
 void moveServoSmoothly(uint8_t servoChannel, int startAngle, int endAngle) {
     int startPulse = map(startAngle, 0, 180, SERVO_MIN, SERVO_MAX);
     int endPulse = map(endAngle, 0, 180, SERVO_MIN, SERVO_MAX);
-
-    int step = (startPulse < endPulse) ? 5 : -5; // Define direction
+    int step = (startPulse < endPulse) ? 5 : -5;
 
     for (int pulse = startPulse; (step > 0) ? (pulse <= endPulse) : (pulse >= endPulse); pulse += step) {
         pca9685.setPWM(servoChannel, 0, pulse);
-        delay(STEP_DELAY); // Small delay for smooth transition
+        delay(STEP_DELAY);
     }
 }
 
 // Move arm to predefined position
 void moveToPosition(ArmPosition targetPosition) {
-    Serial.println("Moving arm to position...");
-    
-    // Move servos simultaneously for smoother operation
     moveServoSmoothly(0, currentPosition.base, targetPosition.base);
     moveServoSmoothly(1, currentPosition.shoulder, targetPosition.shoulder);
     moveServoSmoothly(2, currentPosition.elbow, targetPosition.elbow);
     moveServoSmoothly(3, currentPosition.gripper, targetPosition.gripper);
-    
-    // Update current position
     currentPosition = targetPosition;
-    Serial.println("Position reached!");
 }
 
-// Control conveyor belt with stepper motor
-void setConveyorStepper(int stepsPerSecond, int direction) {
-    conveyorStepsPerSecond = constrain(stepsPerSecond, 0, 50);
-    conveyorDirection = direction;
-    conveyorRunning = (stepsPerSecond > 0);
+// Send heartbeat to keep connection alive
+void sendHeartbeat() {
+    StaticJsonDocument<128> doc;
+    doc["type"] = "heartbeat";
+    doc["device"] = "robot_arm";
+    doc["uptime"] = millis();
     
-    if (conveyorRunning) {
-        conveyorStepper.setSpeed(conveyorStepsPerSecond);
-        Serial.printf("Conveyor: %d steps/sec, direction: %d\n", stepsPerSecond, direction);
-    } else {
-        Serial.println("Conveyor stopped");
-    }
-}
-
-// Run conveyor for specified steps
-void runConveyorSteps(int steps) {
-    if (conveyorRunning) {
-        int totalSteps = steps * conveyorDirection;
-        conveyorStepper.step(totalSteps);
-    }
-}
-
-// Control conveyor belt
-void setConveyor(int speed, int direction) {
-    // Legacy function for backward compatibility
-    setConveyorStepper(speed / 10, direction);  // Convert PWM speed to steps/sec
+    String message;
+    serializeJson(doc, message);
+    webSocket.sendTXT(message);
+    Serial.println("Heartbeat sent");
 }
 
 // WebSocket event handler
@@ -113,106 +91,163 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
     switch(type) {
         case WStype_DISCONNECTED:
             Serial.println("WebSocket disconnected");
+            isConnected = false;
             break;
+            
         case WStype_CONNECTED:
             Serial.println("WebSocket connected");
-            // Send initial status to server
+            isConnected = true;
+            reconnectAttempts = 0;
+            // Send initial status upon connection
+            delay(500);  // Short delay for connection stability
             sendStatus();
             break;
+            
         case WStype_TEXT:
-            Serial.printf("Received message: %s\n", payload);
+            Serial.println("Received text message");
             handleCommand(payload, length);
+            break;
+            
+        case WStype_BIN:
+            Serial.println("Received binary data - not supported");
+            break;
+            
+        case WStype_PING:
+            Serial.println("Received ping");
+            break;
+            
+        case WStype_PONG:
+            Serial.println("Received pong");
+            break;
+            
+        case WStype_ERROR:
+            Serial.println("WebSocket error");
+            break;
+            
+        default:
+            Serial.print("Unknown WebSocket event: ");
+            Serial.println(type);
             break;
     }
 }
 
-// Send current status to server
-void sendStatus() {
-    StaticJsonDocument<512> doc;
-    
-    doc["device"] = "robot_arm_conveyor";
-    doc["conveyor"]["running"] = conveyorRunning;
-    doc["conveyor"]["stepsPerSecond"] = conveyorStepsPerSecond;
-    doc["conveyor"]["direction"] = conveyorDirection;
-    doc["conveyor"]["type"] = "stepper";
-    
-    // Current arm position
-    JsonObject position = doc.createNestedObject("armPosition");
-    position["base"] = currentPosition.base;
-    position["shoulder"] = currentPosition.shoulder;
-    position["elbow"] = currentPosition.elbow;
-    position["gripper"] = currentPosition.gripper;
-    
-    doc["lastDetectedColor"] = lastDetectedColor;
-    doc["timestamp"] = millis();
-    
-    String message;
-    serializeJson(doc, message);
-    webSocket.sendTXT(message);
-}
-
-// Process commands from the server
+// Process incoming commands - IMPROVED VERSION
 void handleCommand(uint8_t* payload, size_t length) {
-    StaticJsonDocument<512> doc;
-    DeserializationError error = deserializeJson(doc, payload, length);
-    
-    if (error) {
-        Serial.print("deserializeJson() failed: ");
-        Serial.println(error.c_str());
+    // Create a null-terminated string from the payload
+    char* jsonStr = (char*)malloc(length + 1);
+    if (jsonStr == NULL) {
+        Serial.println("Memory allocation failed");
         return;
     }
     
-    // Handle object detection results from AI
+    memcpy(jsonStr, payload, length);
+    jsonStr[length] = '\0';
+    
+    Serial.print("Received command: ");
+    Serial.println(jsonStr);
+    
+    // Use a dynamic document for better memory management
+    DynamicJsonDocument doc(1024);  // Increased size for more complex messages
+    DeserializationError error = deserializeJson(doc, jsonStr);
+    free(jsonStr);
+    
+    if (error) {
+        Serial.print("JSON parsing error: ");
+        Serial.println(error.c_str());
+        return;
+    }
+
+    // Process detection commands
     if (doc.containsKey("detection")) {
-        JsonObject detection = doc["detection"];
-        if (detection.containsKey("color")) {
-            String detectedColor = detection["color"].as<String>();
-            lastDetectedColor = detectedColor;
-            Serial.printf("Object detected: %s\n", detectedColor.c_str());
-            
-            // Execute sorting sequence based on detected color
-            executeSortingSequence(detectedColor);
+        Serial.println("Processing detection command");
+        const char* color = doc["detection"]["color"];
+        if (color != NULL) {
+            lastDetectedColor = String(color);
+            Serial.print("Detected color: ");
+            Serial.println(lastDetectedColor);
+            executeSortingSequence(lastDetectedColor);
         }
     }
     
-    // Check for conveyor commands
-    if (doc.containsKey("conveyor")) {
-        JsonObject conveyor = doc["conveyor"];
-        if (conveyor.containsKey("stepsPerSecond") && conveyor.containsKey("direction")) {
-            int stepsPerSecond = conveyor["stepsPerSecond"];
-            int direction = conveyor["direction"];
-            setConveyorStepper(stepsPerSecond, direction);
-        } else if (conveyor.containsKey("steps")) {
-            int steps = conveyor["steps"];
-            runConveyorSteps(steps);
-        } else if (conveyor.containsKey("stop") && conveyor["stop"]) {
-            setConveyorStepper(0, 1);  // Stop the conveyor
+    // Process arm position commands
+    else if (doc.containsKey("armPosition")) {
+        Serial.println("Processing arm position command");
+        const char* position = doc["armPosition"];
+        if (position != NULL) {
+            Serial.print("Moving to position: ");
+            Serial.println(position);
+            moveToNamedPosition(position);
         }
     }
     
-    // Check for arm position commands
-    if (doc.containsKey("armPosition")) {
-        const char* positionName = doc["armPosition"];
-        moveToNamedPosition(positionName);
-    }
-    
-    // Check for manual servo commands (for testing/calibration)
-    if (doc.containsKey("servo")) {
+    // Process individual servo commands
+    else if (doc.containsKey("servo")) {
+        Serial.println("Processing servo command");
         JsonObject servo = doc["servo"];
-        uint8_t channel = servo["channel"];
-        int angle = servo["angle"];
         
-        if (channel >= 0 && channel < 4 && angle >= 0 && angle <= 180) {
+        if (servo.containsKey("channel") && servo.containsKey("angle")) {
+            uint8_t channel = servo["channel"].as<uint8_t>();
+            int angle = servo["angle"].as<int>();
+            
+            Serial.print("Moving servo channel ");
+            Serial.print(channel);
+            Serial.print(" to angle ");
+            Serial.println(angle);
+            
             moveServoSmoothly(channel, getCurrentAngle(channel), angle);
             updateCurrentPosition(channel, angle);
         }
     }
     
-    // Send updated status
+    // Acknowledge receipt of command with updated status
     sendStatus();
 }
 
-// Get current angle for a specific servo channel
+// Improved sendStatus function to ensure format matches what server expects
+void sendStatus() {
+    DynamicJsonDocument doc(1024);  // Larger buffer for complex status
+    
+    // Basic device identification
+    doc["device"] = "robot_arm";
+    doc["status"] = "ok";
+    
+    // Arm position status
+    JsonObject position = doc.createNestedObject("armPosition");
+    position["base"] = currentPosition.base;
+    position["shoulder"] = currentPosition.shoulder;
+    position["elbow"] = currentPosition.elbow;
+    position["gripper"] = currentPosition.gripper;
+
+    // Additional info
+    doc["lastDetectedColor"] = lastDetectedColor;
+    doc["timestamp"] = millis();
+    doc["freeHeap"] = ESP.getFreeHeap();  // Add memory info for debugging
+
+    String message;
+    serializeJson(doc, message);
+    
+    Serial.print("Sending status: ");
+    Serial.println(message);
+    
+    webSocket.sendTXT(message);
+}
+
+// Add this new function to confirm receipt of commands
+void acknowledgeCommand(const char* commandType) {
+    DynamicJsonDocument doc(256);
+    doc["device"] = "robot_arm";
+    doc["type"] = "ack";
+    doc["command"] = commandType;
+    doc["status"] = "received";
+    doc["timestamp"] = millis();
+    
+    String message;
+    serializeJson(doc, message);
+    webSocket.sendTXT(message);
+    Serial.print("Sent command acknowledgement: ");
+    Serial.println(message);
+}
+
 int getCurrentAngle(uint8_t channel) {
     switch(channel) {
         case 0: return currentPosition.base;
@@ -223,7 +258,6 @@ int getCurrentAngle(uint8_t channel) {
     }
 }
 
-// Update current position for a specific servo channel
 void updateCurrentPosition(uint8_t channel, int angle) {
     switch(channel) {
         case 0: currentPosition.base = angle; break;
@@ -233,138 +267,125 @@ void updateCurrentPosition(uint8_t channel, int angle) {
     }
 }
 
-// Move to named position
-void moveToNamedPosition(const char* positionName) {
-    Serial.printf("Moving to position: %s\n", positionName);
-    
-    if (strcmp(positionName, "rest") == 0) {
-        moveToPosition(restPosition);
-    } else if (strcmp(positionName, "pickup") == 0) {
-        moveToPosition(pickupPosition);
-    } else if (strcmp(positionName, "red_bin") == 0) {
-        moveToPosition(redBinPosition);
-    } else if (strcmp(positionName, "green_bin") == 0) {
-        moveToPosition(greenBinPosition);
-    } else if (strcmp(positionName, "blue_bin") == 0) {
-        moveToPosition(blueBinPosition);
-    } else {
-        Serial.printf("Unknown position: %s\n", positionName);
-    }
+void moveToNamedPosition(const char* name) {
+    if (strcmp(name, "rest") == 0) moveToPosition(restPosition);
+    else if (strcmp(name, "pickup") == 0) moveToPosition(pickupPosition);
+    else if (strcmp(name, "red_bin") == 0) moveToPosition(redBinPosition);
+    else if (strcmp(name, "green_bin") == 0) moveToPosition(greenBinPosition);
+    else if (strcmp(name, "blue_bin") == 0) moveToPosition(blueBinPosition);
 }
 
-// Execute sorting sequence based on detected object color
-void executeSortingSequence(String detectedColor) {
-    Serial.printf("Executing sorting sequence for: %s\n", detectedColor.c_str());
-    
-    // Step 1: Stop conveyor to position object
-    setConveyorStepper(0, 1);
-    delay(500);
-    
-    // Step 2: Move to pickup position
+void executeSortingSequence(String color) {
     moveToPosition(pickupPosition);
     delay(1000);
-    
-    // Step 3: Close gripper to grab object
-    ArmPosition grabPosition = pickupPosition;
-    grabPosition.gripper = 180;  // Close gripper
-    moveToPosition(grabPosition);
+    ArmPosition grab = pickupPosition; grab.gripper = 180;
+    moveToPosition(grab);
     delay(1000);
-    
-    // Step 4: Lift object slightly
-    ArmPosition liftPosition = grabPosition;
-    liftPosition.shoulder = 90;  // Lift up
-    moveToPosition(liftPosition);
+    ArmPosition lift = grab; lift.shoulder = 90;
+    moveToPosition(lift);
     delay(500);
-    
-    // Step 5: Move to appropriate bin based on color
-    if (detectedColor.equalsIgnoreCase("red")) {
-        moveToPosition(redBinPosition);
-    } else if (detectedColor.equalsIgnoreCase("green")) {
-        moveToPosition(greenBinPosition);
-    } else if (detectedColor.equalsIgnoreCase("blue")) {
-        moveToPosition(blueBinPosition);
-    } else {
-        // Default to green bin for unknown objects
-        Serial.println("Unknown color, using green bin");
-        moveToPosition(greenBinPosition);
-    }
+
+    if (color.equalsIgnoreCase("red")) moveToPosition(redBinPosition);
+    else if (color.equalsIgnoreCase("green")) moveToPosition(greenBinPosition);
+    else if (color.equalsIgnoreCase("blue")) moveToPosition(blueBinPosition);
+    else moveToPosition(greenBinPosition);
+
     delay(1000);
-    
-    // Step 6: Open gripper to release object
-    ArmPosition releasePosition = currentPosition;
-    releasePosition.gripper = 0;  // Open gripper
-    moveToPosition(releasePosition);
+    ArmPosition release = currentPosition; release.gripper = 0;
+    moveToPosition(release);
     delay(1000);
-    
-    // Step 7: Return to rest position
     moveToPosition(restPosition);
-    delay(500);
-    
-    // Step 8: Restart conveyor for next object
-    setConveyorStepper(15, 1);  // Resume conveyor at moderate speed
-    
-    Serial.println("Sorting sequence completed!");
 }
 
 void connectToWiFi() {
-    Serial.print("Connecting to WiFi");
+    Serial.println("Connecting to WiFi...");
+    WiFi.disconnect();
+    delay(1000);
+    WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, password);
     
-    while (WiFi.status() != WL_CONNECTED) {
+    // Try for 20 seconds (40 * 500ms = 20s)
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 40) {
         delay(500);
         Serial.print(".");
+        attempts++;
     }
     
-    Serial.println();
-    Serial.print("Connected! IP address: ");
-    Serial.println(WiFi.localIP());
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\nWiFi connected");
+        Serial.print("IP address: ");
+        Serial.println(WiFi.localIP());
+    } else {
+        Serial.println("\nWiFi connection failed");
+        // Reset ESP8266 after multiple failed attempts
+        if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+            Serial.println("Too many reconnect attempts, restarting ESP...");
+            ESP.restart();
+        }
+    }
 }
 
 void setup() {
     Serial.begin(115200);
+    delay(1000);
+    Serial.println("\nRobot Arm Control System Starting...");
     
-    // Initialize stepper motor pins
-    pinMode(STEPPER_PIN1, OUTPUT);
-    pinMode(STEPPER_PIN2, OUTPUT);
-    pinMode(STEPPER_PIN3, OUTPUT);
-    pinMode(STEPPER_PIN4, OUTPUT);
-    
-    // Set initial stepper speed
-    conveyorStepper.setSpeed(10);  // Default 10 steps per second
-    
-    // Initialize PCA9685
-    Wire.begin();
+    // Initialize hardware
+      Wire.begin(SDA_PIN, SCL_PIN);
     pca9685.begin();
-    pca9685.setPWMFreq(50);  // 50Hz frequency for servos
-    Serial.println("PCA9685 Initialized!");
-    
-    // Move to initial rest position
+    pca9685.setPWMFreq(50);
     moveToPosition(restPosition);
-    Serial.println("Arm moved to rest position");
     
     // Connect to WiFi
     connectToWiFi();
     
-    // Initialize WebSocket connection
+    // Configure WebSocket with better settings
     webSocket.begin(webSocketHost, webSocketPort, webSocketPath);
     webSocket.onEvent(webSocketEvent);
-    webSocket.setReconnectInterval(5000);
+    webSocket.setReconnectInterval(2000);       // More aggressive reconnect (2 seconds)
+    webSocket.enableHeartbeat(25000, 3000, 2);  // Enable heartbeat with 25s interval, 3s timeout, 2 retries
     
-    Serial.println("System initialized and ready!");
+    lastConnectionCheck = millis();
+    lastHeartbeat = millis();
+    Serial.println("Setup complete!");
 }
 
 void loop() {
     webSocket.loop();
     
-    // Run conveyor continuously if enabled
-    if (conveyorRunning) {
-        runConveyorSteps(1);  // Move one step at a time for smooth operation
-        delay(1000 / max(1, conveyorStepsPerSecond));  // Control speed
+    unsigned long currentTime = millis();
+    
+    // Check connection health periodically
+    if (currentTime - lastConnectionCheck > CONNECTION_CHECK_INTERVAL) {
+        lastConnectionCheck = currentTime;
+        
+        // Check WiFi connection
+        if (WiFi.status() != WL_CONNECTED) {
+            Serial.println("WiFi disconnected, reconnecting...");
+            reconnectAttempts++;
+            connectToWiFi();
+        }
+        
+        // If connected to WiFi but not to WebSocket server, reconnect WebSocket
+        if (WiFi.status() == WL_CONNECTED && !isConnected) {
+            Serial.println("WebSocket disconnected, reconnecting...");
+            webSocket.disconnect();
+            delay(500);
+            webSocket.begin(webSocketHost, webSocketPort, webSocketPath);
+        }
     }
     
-    // Maintain WebSocket connection
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("WiFi disconnected. Reconnecting...");
-        connectToWiFi();
+    // Send heartbeat periodically to keep connection alive
+    if (isConnected && currentTime - lastHeartbeat > HEARTBEAT_INTERVAL) {
+        lastHeartbeat = currentTime;
+        sendHeartbeat();
+    }
+    
+    // Reset device if too many reconnection attempts have occurred
+    if (!isConnected && reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+        Serial.println("Max reconnect attempts reached, resetting ESP...");
+        delay(1000);
+        ESP.restart();
     }
 }

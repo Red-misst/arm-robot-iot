@@ -110,6 +110,62 @@
         </div>
     </header>
 
+    <!-- Insert after the header section, before the main grid -->
+    <div class="relative z-10 max-w-7xl mx-auto px-6 mb-6">
+        <div class="glass-effect rounded-2xl p-4">
+            <h3 class="text-lg font-semibold mb-3 flex items-center">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                System Status
+            </h3>
+            <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                <div class="bg-black/20 p-3 rounded-xl flex flex-col items-center">
+                    <div class="text-sm text-gray-300 mb-1">Main Controller</div>
+                    <div class="flex items-center">
+                        <div class="w-3 h-3 rounded-full bg-green-500 mr-2 pulse-glow"></div>
+                        <span class="text-sm font-medium text-green-400">Online</span>
+                    </div>
+                </div>
+                <div class="bg-black/20 p-3 rounded-xl flex flex-col items-center">
+                    <div class="text-sm text-gray-300 mb-1">Power System</div>
+                    <div class="flex items-center">
+                        <div class="w-3 h-3 rounded-full bg-green-500 mr-2"></div>
+                        <span class="text-sm font-medium text-green-400">95%</span>
+                    </div>
+                </div>
+                <div class="bg-black/20 p-3 rounded-xl flex flex-col items-center">
+                    <div class="text-sm text-gray-300 mb-1">Vision Module</div>
+                    <div class="flex items-center">
+                        <div class="w-3 h-3 rounded-full bg-green-500 mr-2"></div>
+                        <span class="text-sm font-medium text-green-400">Active</span>
+                    </div>
+                </div>
+                <div class="bg-black/20 p-3 rounded-xl flex flex-col items-center">
+                    <div class="text-sm text-gray-300 mb-1">Servo Motors</div>
+                    <div class="flex items-center">
+                        <div class="w-3 h-3 rounded-full bg-green-500 mr-2"></div>
+                        <span class="text-sm font-medium text-green-400">Operational</span>
+                    </div>
+                </div>
+                <div class="bg-black/20 p-3 rounded-xl flex flex-col items-center">
+                    <div class="text-sm text-gray-300 mb-1">Conveyor</div>
+                    <div class="flex items-center">
+                        <div class="w-3 h-3 rounded-full bg-amber-500 mr-2 pulse-glow"></div>
+                        <span class="text-sm font-medium text-amber-400">Idle</span>
+                    </div>
+                </div>
+                <div class="bg-black/20 p-3 rounded-xl flex flex-col items-center">
+                    <div class="text-sm text-gray-300 mb-1">Network</div>
+                    <div class="flex items-center">
+                        <div class="w-3 h-3 rounded-full bg-green-500 mr-2"></div>
+                        <span class="text-sm font-medium text-green-400">54ms</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="relative z-10 max-w-7xl mx-auto px-6 pb-6">
         <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
             
@@ -270,7 +326,28 @@
         </div>
         
         <!-- Activity Log -->
-        <div class="mt-6">
+        <div class="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- Detection Log -->
+            <div class="glass-effect rounded-2xl p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold flex items-center">
+                        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                        </svg>
+                        Detection Log
+                    </h3>
+                    <button id="clearDetectionLog" class="px-3 py-1 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-lg text-sm transition-colors">
+                        Clear
+                    </button>
+                </div>
+                <div id="detectionLog" class="h-40 overflow-y-auto custom-scrollbar bg-black/20 rounded-lg p-4 font-mono text-sm space-y-1">
+                    <div class="text-green-400">[Detected] Red object at position (120, 85)</div>
+                    <div class="text-blue-400">[Detected] Blue object at position (45, 92)</div>
+                    <div class="text-amber-400">[Detected] Unknown object - additional sensing required</div>
+                </div>
+            </div>
+            
+            <!-- Original Activity Log -->
             <div class="glass-effect rounded-2xl p-6">
                 <div class="flex items-center justify-between mb-4">
                     <h3 class="text-lg font-semibold flex items-center">
@@ -292,5 +369,7 @@
 
     <!-- Include the arm simulation JavaScript -->
     <script src="./arm-simulation.js"></script>
+    <!-- Include our API integration script -->
+    <script src="./arm-monitor.js"></script>
 </body>
 </html>

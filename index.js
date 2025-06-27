@@ -27,11 +27,16 @@ const wss = new WebSocketServer({ server });
 
 // Store connected clients
 let clients = {
-  robot: null,
+  robot: null, // ESP8266
   camera: null,
   ui: [],
   ai: null
 };
+
+// Outgoing message queue for robot
+let robotMessageQueue = [];
+let robotReady = false;
+let lastRobotStatus = null;
 
 // Track the latest frame for new UI connections
 let latestFrame = null;
@@ -104,20 +109,12 @@ const handleMessage = (message, sender, senderType) => {
         message instanceof ArrayBuffer || 
         (typeof message === 'object' && message.toString() === '[object ArrayBuffer]') ||
         isJpegData(message)) {
-      
       // Convert ArrayBuffer to Buffer if needed
       const frameBuffer = message instanceof ArrayBuffer ? Buffer.from(message) : message;
-      
       if (senderType === 'camera') {
         console.log(`Received binary frame from camera: ${frameBuffer.length} bytes`);
-        
-        // Store the latest frame
         latestFrame = frameBuffer;
-        
-        // Forward camera frames to UI and AI
         broadcastToUI(frameBuffer);
-        
-        // Forward to AI for processing
         if (clients.ai && clients.ai.readyState === WebSocket.OPEN) {
           clients.ai.send(frameBuffer, (err) => {
             if (err) {
@@ -128,16 +125,23 @@ const handleMessage = (message, sender, senderType) => {
       }
       return;
     }
-    
+
     // For text messages, parse as JSON
-    // First make sure it's actually a string
     const jsonData = typeof message === 'string' ? message : message.toString();
     const data = JSON.parse(jsonData);
-    
+
     // Add a timestamp and source to the message
     data.timestamp = data.timestamp || new Date().toISOString();
     data.source = senderType;
-    
+
+    // Handle robot status messages
+    if (senderType === 'robot' && data.device === 'robot_arm_conveyor') {
+      lastRobotStatus = data;
+      console.log('[ROBOT]', JSON.stringify(data));
+      broadcastToUI({ type: 'robot_status', data });
+      return;
+    }
+
     // Handle camera metadata
     if (senderType === 'camera' && data.type === 'frame_metadata') {
       broadcastToUI(data);
@@ -145,24 +149,17 @@ const handleMessage = (message, sender, senderType) => {
         clients.ai.send(JSON.stringify(data));
       }
     }
-      // Handle AI detection results
+    // Handle AI detection results
     if (senderType === 'ai' && data.type === 'detection') {
       console.log(`Received AI detection: ${data.detections.length} objects`);
       console.log(`Detection data sample:`, JSON.stringify(data.detections[0] || {}));
-      
-      // Forward detection results to UI clients
       broadcastToUI(data);
-      
-      // Send detection to robot for sorting action
       sendDetectionToRobot(data);
     }
-    
     // Handle AI control messages
     if (data.type === 'ai_control') {
       aiControlEnabled = data.enabled;
       console.log(`AI control ${aiControlEnabled ? 'enabled' : 'disabled'}`);
-      
-      // Notify AI client of control status change
       if (clients.ai && clients.ai.readyState === WebSocket.OPEN) {
         clients.ai.send(JSON.stringify({
           type: 'control_status',
@@ -242,80 +239,56 @@ const sendDetectionToRobot = (detectionData) => {
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const clientType = url.searchParams.get('type');
-  
+
   console.log(`New WebSocket connection: ${clientType} from ${req.socket.remoteAddress}`);
-  
-  // Set binary type to arraybuffer for all connections
+
   ws.binaryType = 'arraybuffer';
-  
+
   // Register the client based on type
   switch (clientType) {
+    case 'robot':
+      if (clients.robot && clients.robot.readyState === ws.OPEN) {
+        // Only one robot allowed; close previous
+        clients.robot.close();
+      }
+      clients.robot = ws;
+      robotReady = true;
+      // Send any queued messages
+      while (robotMessageQueue.length > 0) {
+        const msg = robotMessageQueue.shift();
+        try { ws.send(msg); } catch (e) { console.error('Failed to send queued msg:', e); }
+      }
+      broadcastToUI({
+        type: 'connection_status',
+        device: 'robot',
+        status: 'connected'
+      });
+      break;
     case 'camera':
       clients.camera = ws;
-      broadcastToUI({
-        type: 'connection_status',
-        device: 'camera',
-        status: 'connected'
-      });
+      broadcastToUI({ type: 'connection_status', device: 'camera', status: 'connected' });
       break;
-      
-    case 'robot':
-      clients.robot = ws;
-      broadcastToUI({
-        type: 'connection_status',
-        device: 'robot',
-        status: 'connected'
-      });
-      break;
-      
     case 'ui':
       clients.ui.push(ws);
-      
       // Send current connection statuses
-      ws.send(JSON.stringify({
-        type: 'connection_status',
-        device: 'robot',
-        status: clients.robot ? 'connected' : 'disconnected'
-      }));
-      
-      ws.send(JSON.stringify({
-        type: 'connection_status',
-        device: 'camera',
-        status: clients.camera ? 'connected' : 'disconnected'
-      }));
-      
-      ws.send(JSON.stringify({
-        type: 'connection_status',
-        device: 'ai',
-        status: clients.ai ? 'connected' : 'disconnected'
-      }));
-      
-      // Send latest robot status if available
-      if (latestRobotStatus) {
-        ws.send(JSON.stringify(latestRobotStatus));
-      } 
-      
-      // Send latest camera frame if available
+      ws.send(JSON.stringify({ type: 'connection_status', device: 'robot', status: clients.robot ? 'connected' : 'disconnected' }));
+      ws.send(JSON.stringify({ type: 'connection_status', device: 'camera', status: clients.camera ? 'connected' : 'disconnected' }));
+      ws.send(JSON.stringify({ type: 'connection_status', device: 'ai', status: clients.ai ? 'connected' : 'disconnected' }));
+      if (lastRobotStatus) {
+        ws.send(JSON.stringify({ type: 'robot_status', data: lastRobotStatus }));
+      }
       if (latestFrame) {
         ws.send(latestFrame);
       }
       break;
-      
     case 'ai':
-      console.log('AI client connected');
       clients.ai = ws;
-      broadcastToUI({
-        type: 'connection_status',
-        device: 'ai',
-        status: 'connected'
-      });
+      broadcastToUI({ type: 'connection_status', device: 'ai', status: 'connected' });
       break;
-      
     default:
       console.log(`Unknown client type: ${clientType}`);
   }
-  
-  // Set up message handler
+
   ws.on('message', (message) => {
     try {
       handleMessage(message, ws, clientType);
@@ -323,18 +296,18 @@ wss.on('connection', (ws, req) => {
       console.error(`Error handling message from ${clientType}:`, e);
     }
   });
-  
-  // Set up close handler
+
   ws.on('close', () => {
     console.log(`${clientType} client disconnected`);
-    
-    // Handle specific client disconnections
     switch (clientType) {
       case 'camera':
         clients.camera = null;
         break;
       case 'robot':
-        clients.robot = null;
+        if (clients.robot === ws) {
+          clients.robot = null;
+          robotReady = false;
+        }
         break;
       case 'ai':
         clients.ai = null;
@@ -343,16 +316,43 @@ wss.on('connection', (ws, req) => {
         clients.ui = clients.ui.filter(client => client !== ws);
         break;
     }
-    
-    // Notify UI clients about disconnection
     if (clientType && clientType !== 'ui') {
-      broadcastToUI({
-        type: 'connection_status',
-        device: clientType,
-        status: 'disconnected'
-      });
+      broadcastToUI({ type: 'connection_status', device: clientType, status: 'disconnected' });
     }
   });
+});
+
+// REST API: Send commands to robot (ESP8266)
+app.use(express.json());
+
+// POST /api/robot/command
+app.post('/api/robot/command', (req, res) => {
+  const command = req.body;
+  if (!command || typeof command !== 'object') {
+    return res.status(400).json({ error: 'Invalid command' });
+  }
+  const msg = JSON.stringify(command);
+  if (clients.robot && clients.robot.readyState === clients.robot.OPEN) {
+    try {
+      clients.robot.send(msg);
+      return res.json({ status: 'sent' });
+    } catch (e) {
+      robotMessageQueue.push(msg);
+      return res.status(500).json({ error: 'Failed to send, queued' });
+    }
+  } else {
+    robotMessageQueue.push(msg);
+    return res.json({ status: 'queued' });
+  }
+});
+
+// GET /api/robot/status
+app.get('/api/robot/status', (req, res) => {
+  if (lastRobotStatus) {
+    return res.json(lastRobotStatus);
+  } else {
+    return res.json({ status: robotReady ? 'online' : 'offline' });
+  }
 });
 
 // Modify the server startup section
