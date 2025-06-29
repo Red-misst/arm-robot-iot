@@ -1,6 +1,6 @@
 #include <Wire.h>
 #include <Adafruit_PWMServoDriver.h>
-#include <ESP8266WiFi.h>
+#include <WiFi.h>
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 
@@ -35,9 +35,10 @@ const char* webSocketHost = "192.168.0.109";
 const uint16_t webSocketPort = 3000;
 const char* webSocketPath = "/?type=robot";
 
-// Define ESP8266 pins for I2C
-#define SDA_PIN 4  // GPIO4 (D2 on NodeMCU)
-#define SCL_PIN 5  // GPIO5 (D1 on NodeMCU)
+// Define ESP32 pins for I2C (standard ESP32 DevKit pins)
+#define SDA_PIN 21  // GPIO21 (standard ESP32 SDA)
+#define SCL_PIN 22  // GPIO22 (standard ESP32 SCL)
+
 // Connection management
 #define CONNECTION_CHECK_INTERVAL 5000    // Check connection every 5 seconds
 #define HEARTBEAT_INTERVAL 15000          // Send heartbeat every 15 seconds
@@ -221,7 +222,7 @@ void sendStatus() {
     // Additional info
     doc["lastDetectedColor"] = lastDetectedColor;
     doc["timestamp"] = millis();
-    doc["freeHeap"] = ESP.getFreeHeap();  // Add memory info for debugging
+    doc["freeHeap"] = ESP.getFreeHeap();  // ESP32 compatible heap function
 
     String message;
     serializeJson(doc, message);
@@ -318,7 +319,7 @@ void connectToWiFi() {
         Serial.println(WiFi.localIP());
     } else {
         Serial.println("\nWiFi connection failed");
-        // Reset ESP8266 after multiple failed attempts
+        // Reset ESP32 after multiple failed attempts
         if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
             Serial.println("Too many reconnect attempts, restarting ESP...");
             ESP.restart();
@@ -331,8 +332,8 @@ void setup() {
     delay(1000);
     Serial.println("\nRobot Arm Control System Starting...");
     
-    // Initialize hardware
-      Wire.begin(SDA_PIN, SCL_PIN);
+    // Initialize hardware - ESP32 Wire library initialization
+    Wire.begin(SDA_PIN, SCL_PIN);
     pca9685.begin();
     pca9685.setPWMFreq(50);
     moveToPosition(restPosition);
