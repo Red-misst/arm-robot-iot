@@ -1,324 +1,444 @@
 import cv2
 import numpy as np
-import websocket
-import threading
 import json
 import time
-import base64
+import threading
+import websocket
+import logging
 from io import BytesIO
 from PIL import Image
-import ssl
+import sys
+import os
+import io
 
-# Import ultralytics YOLO (make sure it's installed)
-try:
-    from ultralytics import YOLO
-except ImportError:
-    print("Error: YOLO not found. Please install with: pip install ultralytics")
-    exit(1)
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 # Configuration
 WS_SERVER = "ws://localhost:3000/?type=ai"
-AI_CONTROL_ENABLED = False
-DETECTION_INTERVAL = 0.1  # seconds between processing frames
-MIN_CONFIDENCE = 0.5  # Minimum confidence threshold
+DETECTION_INTERVAL = 0.15  # Process every 150ms (6-7 FPS)
+MIN_CONTOUR_AREA = 1000    # Minimum area to consider as valid object
+MORPHOLOGY_KERNEL_SIZE = 5  # For noise removal
 
-# Colors to detect (in HSV space)
+# Enhanced logging setup
+class ColoredFormatter(logging.Formatter):
+    """Colored log formatter for better visibility"""
+    
+    COLORS = {
+        'DEBUG': '\033[36m',    # Cyan
+        'INFO': '\033[32m',     # Green
+        'WARNING': '\033[33m',  # Yellow
+        'ERROR': '\033[31m',    # Red
+        'CRITICAL': '\033[35m', # Magenta
+    }
+    RESET = '\033[0m'
+    
+    def format(self, record):
+        log_color = self.COLORS.get(record.levelname, self.RESET)
+        record.levelname = f"{log_color}[{record.levelname}]{self.RESET}"
+        return super().format(record)
+
+# Setup enhanced logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - [AI] %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Apply colored formatter
+for handler in logger.handlers:
+    handler.setFormatter(ColoredFormatter('%(asctime)s - %(levelname)s - [AI] %(message)s'))
+
+# HSV Color Ranges for Detection
 COLOR_RANGES = {
-    'red': [
-        (np.array([0, 100, 100]), np.array([10, 255, 255])),   # Lower red range
-        (np.array([160, 100, 100]), np.array([180, 255, 255]))  # Upper red range
+    "red": [
+        (np.array([0, 120, 70]), np.array([10, 255, 255])),    # Lower red range
+        (np.array([170, 120, 70]), np.array([180, 255, 255]))  # Upper red range
     ],
-    'green': [(np.array([40, 100, 100]), np.array([80, 255, 255]))],
-    'blue': [(np.array([100, 100, 100]), np.array([140, 255, 255]))]
+    "yellow": [
+        (np.array([20, 100, 100]), np.array([30, 255, 255]))   # Yellow range
+    ],
+    "pink": [
+        (np.array([140, 50, 100]), np.array([170, 255, 255]))  # Pink range
+    ]
 }
 
-# Global variables
-latest_frame = None
-robot_status = None
-processing_frame = False
-ws_app = None
-
-# Track sorted objects
-sorted_objects = {
-    'red': 0,
-    'green': 0,
-    'blue': 0
-}
-
-# Initialize YOLO model
-model = YOLO("yolov8n.pt")  # Using the nano model for speed
-
-def process_frame(frame_data):
-    global latest_frame, processing_frame
-    
-    if processing_frame:
-        return
-    
-    processing_frame = True
-    
-    try:
-        # Convert frame data to numpy array
-        frame_bytes = np.frombuffer(frame_data, dtype=np.uint8)
+class AIVisionProcessor:
+    def __init__(self):
+        self.ws = None
+        self.latest_frame = None
+        self.processing_frame = False
+        self.last_detection_time = 0
+        self.detection_enabled = False  # Start disabled, wait for server command
+        self.frame_count = 0
+        self.frames_received = 0
+        self.frames_processed = 0
+        self.detection_stats = {
+            'red': 0,
+            'yellow': 0,
+            'pink': 0,
+            'total_processed': 0,
+            'processing_errors': 0
+        }
         
-        # Decode the image
-        image = cv2.imdecode(frame_bytes, cv2.IMREAD_COLOR)
-        if image is None:
-            print("Failed to decode image")
-            processing_frame = False
+        # Performance monitoring
+        self.start_time = time.time()
+        self.last_stats_time = time.time()
+        
+        # Create morphological kernel for noise reduction
+        self.kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, 
+                                              (MORPHOLOGY_KERNEL_SIZE, MORPHOLOGY_KERNEL_SIZE))
+        
+        logger.info("[AI] AI Vision Processor initialized")
+        logger.info(f"[CONFIG] Monitoring colors: {list(COLOR_RANGES.keys())}")
+
+    def connect_websocket(self):
+        """Connect to the WebSocket server with retry logic"""
+        try:
+            logger.info(f"[WS] Connecting to WebSocket server: {WS_SERVER}")
+            self.ws = websocket.WebSocketApp(
+                WS_SERVER,
+                on_open=self.on_open,
+                on_message=self.on_message,
+                on_error=self.on_error,
+                on_close=self.on_close
+            )
+            
+            # Start the WebSocket connection in a separate thread
+            ws_thread = threading.Thread(target=self.ws.run_forever)
+            ws_thread.daemon = True
+            ws_thread.start()
+            
+            logger.info("[WS] WebSocket connection initiated...")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to connect to WebSocket: {e}")
+            return False
+
+    def on_open(self, ws):
+        """Called when WebSocket connection is established"""
+        logger.info("[WS] WebSocket connection established with server")
+        
+        # Send initial message to identify as AI client
+        init_message = {
+            "type": "ai_init",
+            "message": "AI Vision Engine connected",
+            "capabilities": ["color_detection", "object_tracking"],
+            "colors": list(COLOR_RANGES.keys()),
+            "version": "2.0",
+            "timestamp": time.time()
+        }
+        
+        try:
+            ws.send(json.dumps(init_message))
+            logger.info("📤 AI initialization message sent to server")
+        except Exception as e:
+            logger.error(f"❌ Failed to send init message: {e}")
+
+    def on_message(self, ws, message):
+        """Handle incoming WebSocket messages"""
+        try:
+            # Check if message is binary (frame data) or text (JSON)
+            if isinstance(message, bytes):
+                self.handle_frame_data(message)
+            else:
+                # Handle JSON messages
+                data = json.loads(message)
+                self.handle_json_message(data)
+                
+        except json.JSONDecodeError:
+            logger.warning("⚠️  Received non-JSON text message")
+        except Exception as e:
+            logger.error(f"❌ Error processing message: {e}")
+
+    def handle_frame_data(self, frame_data):
+        """Process incoming camera frame data"""
+        self.frames_received += 1
+        current_time = time.time()
+        
+        # Log frame reception periodically
+        if self.frames_received % 30 == 1:  # Every 30 frames
+            logger.info(f"📸 Received frame #{self.frames_received} ({len(frame_data)} bytes)")
+        
+        # Check if detection is enabled
+        if not self.detection_enabled:
+            if self.frames_received % 50 == 1:  # Log every 50 frames when disabled
+                logger.warning("⏸️  Detection DISABLED - frames received but not processed")
             return
         
-        # Store latest frame
-        latest_frame = image
+        # Rate limiting - only process frames at specified interval
+        if current_time - self.last_detection_time < DETECTION_INTERVAL:
+            return
+            
+        if self.processing_frame:
+            logger.debug("⏭️  Skipping frame - already processing")
+            return
+            
+        self.frame_count += 1
+        self.latest_frame = frame_data
         
-        # Process with YOLO
-        results = model(image)
+        # Process frame in separate thread to avoid blocking
+        processing_thread = threading.Thread(target=self.process_frame, args=(frame_data,))
+        processing_thread.daemon = True
+        processing_thread.start()
+
+    def handle_json_message(self, data):
+        """Handle JSON control messages"""
+        message_type = data.get('type', '')
+        logger.debug(f"📥 Received JSON message: {message_type}")
         
-        # Get standard YOLO detections (people, objects)
-        yolo_detections = []
-        for r in results:
-            boxes = r.boxes
-            for box in boxes:
-                x1, y1, x2, y2 = box.xyxy[0].tolist()
-                conf = box.conf[0].item()
-                cls = int(box.cls[0].item())
-                class_name = model.names[cls]
+        if message_type == 'control_status':
+            old_status = self.detection_enabled
+            self.detection_enabled = data.get('enabled', False)  # Default to False if not specified
+            
+            # Always log the status change clearly
+            status_text = "🟢 ENABLED" if self.detection_enabled else "🔴 DISABLED"
+            logger.info(f"🎛️ AI Control Message Received! Detection now {status_text}")
+            logger.info(f"Control message details: {data}")
+            
+        elif message_type == 'get_stats':
+            self.send_statistics()
+            
+        else:
+            logger.debug(f"📨 Received control message: {message_type}")
+
+    def process_frame(self, frame_data):
+        """Main frame processing pipeline"""
+        if not self.detection_enabled:
+            return
+            
+        self.processing_frame = True
+        self.last_detection_time = time.time()
+        processing_start = time.time()
+        
+        try:
+            # Convert binary data to OpenCV image
+            image = self.binary_to_opencv(frame_data)
+            if image is None:
+                logger.warning("⚠️  Failed to convert frame data to image")
+                return
                 
-                if conf > MIN_CONFIDENCE:
-                    yolo_detections.append({
-                        'class': class_name,
-                        'confidence': conf,
-                        'bbox': {
-                            'x': float(x1) / image.shape[1],
-                            'y': float(y1) / image.shape[0],
-                            'width': float(x2 - x1) / image.shape[1],
-                            'height': float(y2 - y1) / image.shape[0]
-                        }
-                    })
+            # Perform color detection
+            detections = self.detect_colors(image)
+            
+            # Send detection results
+            if detections:
+                self.send_detection_results(detections, image.shape)
+                detection = detections[0]
+                logger.info(f"🎯 DETECTED: {detection['color'].upper()} "
+                           f"(confidence: {detection['confidence']:.3f}, "
+                           f"area: {detection['area']}px)")
+            else:
+                # Log no detection periodically
+                if self.frame_count % 20 == 1:
+                    logger.debug("🔍 No objects detected in frame")
+                
+            self.frames_processed += 1
+            self.detection_stats['total_processed'] += 1
+            
+            # Performance logging
+            processing_time = time.time() - processing_start
+            if processing_time > 0.1:  # Log slow processing
+                logger.warning(f"⚠️  Slow processing: {processing_time:.3f}s")
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing frame #{self.frame_count}: {e}")
+            self.detection_stats['processing_errors'] += 1
+        finally:
+            self.processing_frame = False
+
+    def binary_to_opencv(self, frame_data):
+        """Convert binary JPEG data to OpenCV image"""
+        try:
+            # Convert binary data to PIL Image
+            pil_image = Image.open(BytesIO(frame_data))
+            
+            # Convert PIL to OpenCV format (BGR)
+            opencv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+            
+            return opencv_image
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to convert frame data: {e}")
+            return None
+
+    def detect_colors(self, image):
+        """Detect colored objects in the image using HSV color space"""
+        detections = []
         
-        # Convert to HSV for color detection
+        # Convert to HSV color space
         hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        height, width = image.shape[:2]
         
-        # Color-based detection
-        color_detections = []
+        # Process each color
         for color_name, ranges in COLOR_RANGES.items():
-            # Create mask for this color
-            mask = None
+            total_mask = None
+            
+            # Combine all ranges for this color (important for red)
             for lower, upper in ranges:
-                if mask is None:
-                    mask = cv2.inRange(hsv_image, lower, upper)
+                mask = cv2.inRange(hsv_image, lower, upper)
+                
+                if total_mask is None:
+                    total_mask = mask
                 else:
-                    mask = mask | cv2.inRange(hsv_image, lower, upper)
+                    total_mask = cv2.bitwise_or(total_mask, mask)
+            
+            # Apply morphological operations to reduce noise
+            total_mask = cv2.morphologyEx(total_mask, cv2.MORPH_OPEN, self.kernel)
+            total_mask = cv2.morphologyEx(total_mask, cv2.MORPH_CLOSE, self.kernel)
             
             # Find contours
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours, _ = cv2.findContours(total_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             
-            # Filter by size and create detection objects
+            # Process valid contours
             for contour in contours:
                 area = cv2.contourArea(contour)
                 
-                # Filter small noise
-                if area > 500:  # Minimum area threshold
+                if area > MIN_CONTOUR_AREA:
+                    # Get bounding box
                     x, y, w, h = cv2.boundingRect(contour)
                     
-                    # Calculate center point for robot control
-                    center_x = x + (w // 2)
-                    center_y = y + (h // 2)
+                    # Calculate confidence based on area and mask density
+                    mask_region = total_mask[y:y+h, x:x+w]
+                    density = np.sum(mask_region > 0) / (w * h)
+                    confidence = min(0.95, (area / 5000) * density)
                     
-                    # Add to detections
-                    color_detections.append({
+                    detection = {
                         'color': color_name,
-                        'area': area,
-                        'confidence': 1.0,  # Color detection confidence
+                        'confidence': round(confidence, 3),
                         'bbox': {
-                            'x': float(x) / image.shape[1],
-                            'y': float(y) / image.shape[0],
-                            'width': float(w) / image.shape[1],
-                            'height': float(h) / image.shape[0]
+                            'x': int(x),
+                            'y': int(y),
+                            'width': int(w),
+                            'height': int(h)
                         },
+                        'area': int(area),
                         'center': {
-                            'x': float(center_x) / image.shape[1],
-                            'y': float(center_y) / image.shape[0]
+                            'x': int(x + w/2),
+                            'y': int(y + h/2)
                         }
-                    })
+                    }
+                    
+                    detections.append(detection)
+                    self.detection_stats[color_name] += 1
         
-        # Send all detections to the server
-        if ws_app and ws_app.sock.connected:
-            ws_app.send(json.dumps({
-                'type': 'detection',
-                'detections': color_detections + yolo_detections,
-                'timestamp': time.time()
-            }))
+        # Sort by area (largest first) and return top detection
+        if detections:
+            detections.sort(key=lambda d: d['area'], reverse=True)
+            return detections[:1]  # Return only the largest detection
         
-        # If AI control is enabled, process the largest colored object
-        if AI_CONTROL_ENABLED and color_detections:
-            # Sort by area (largest first)
-            color_detections.sort(key=lambda x: x['area'], reverse=True)
-            largest_object = color_detections[0]
+        return []
+
+    def send_detection_results(self, detections, image_shape):
+        """Send detection results to the server"""
+        if not self.ws or not detections:
+            return
             
-            # Check if object is in the center of the frame
-            if 0.4 <= largest_object['center']['x'] <= 0.6:
-                handle_object_detection(largest_object)
-    
-    except Exception as e:
-        print(f"Error processing frame: {e}")
-    
-    finally:
-        processing_frame = False
+        result_message = {
+            'type': 'detection',
+            'detections': detections,
+            'frame_info': {
+                'width': image_shape[1],
+                'height': image_shape[0],
+                'frame_count': self.frame_count
+            },
+            'timestamp': time.time()
+        }
+        
+        try:
+            self.ws.send(json.dumps(result_message))
+            logger.debug("📤 Detection results sent to server")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to send detection results: {e}")
 
-def handle_object_detection(detection):
-    global robot_status, sorted_objects
-    
-    if not robot_status:
-        return
-    
-    color = detection['color']
-    print(f"Processing {color} object")
-    
-    # Check if conveyor is already running
-    if robot_status.get('conveyor', {}).get('running', False):
-        return
+    def send_statistics(self):
+        """Send processing statistics to the server"""
+        if not self.ws:
+            return
+            
+        current_time = time.time()
+        uptime = current_time - self.start_time
         
-    # Send command to start sorting sequence for this color
-    if ws_app and ws_app.sock.connected:
-        sorted_objects[color] += 1
+        stats_message = {
+            'type': 'ai_statistics',
+            'stats': {
+                **self.detection_stats,
+                'frames_received': self.frames_received,
+                'frames_processed': self.frames_processed,
+                'uptime_seconds': round(uptime, 1),
+                'processing_rate_fps': round(self.frames_processed / max(uptime, 1), 2)
+            },
+            'processing_rate': f"{1/DETECTION_INTERVAL:.1f} FPS target",
+            'timestamp': current_time
+        }
         
-        # First stop the conveyor
-        ws_app.send(json.dumps({
-            'type': 'robot_command',
-            'command': {
-                'conveyor': {
-                    'stop': True
-                }
-            }
-        }))
-        
-        time.sleep(0.5)  # Short pause
-        
-        # Different position based on color
-        if color == 'red':
-            target_angle = 180  # Right side
-        elif color == 'green':
-            target_angle = 90   # Middle
-        elif color == 'blue':
-            target_angle = 0    # Left side
-        
-        # Custom sequence for this color
-        ws_app.send(json.dumps({
-            'type': 'robot_command',
-            'command': {
-                'sequence': 'custom',
-                'steps': [
-                    # Move arm to position over object
-                    {'servo': {'channel': 0, 'angle': 90}},
-                    {'servo': {'channel': 1, 'angle': 60}},
-                    {'servo': {'channel': 2, 'angle': 120}},
-                    {'servo': {'channel': 3, 'angle': 90}},
-                    
-                    # Grab object (close gripper)
-                    {'servo': {'channel': 3, 'angle': 180}},
-                    {'delay': 500},
-                    
-                    # Lift up
-                    {'servo': {'channel': 1, 'angle': 90}},
-                    {'delay': 500},
-                    
-                    # Rotate to target position
-                    {'servo': {'channel': 0, 'angle': target_angle}},
-                    {'delay': 500},
-                    
-                    # Lower arm
-                    {'servo': {'channel': 1, 'angle': 60}},
-                    {'delay': 500},
-                    
-                    # Release object
-                    {'servo': {'channel': 3, 'angle': 90}},
-                    {'delay': 500},
-                    
-                    # Return to home
-                    {'servo': {'channel': 1, 'angle': 90}},
-                    {'servo': {'channel': 0, 'angle': 90}},
-                    
-                    # Restart conveyor
-                    {'conveyor': {'speed': 150, 'direction': 1}}
-                ]
-            }
-        }))
-        
-        print(f"Sent sorting command for {color} object. Total sorted: {sorted_objects}")
+        try:
+            self.ws.send(json.dumps(stats_message))
+            logger.info("📊 Statistics sent to server")
+        except Exception as e:
+            logger.error(f"❌ Failed to send statistics: {e}")
 
-def on_message(ws, message):
-    try:
-        # Check if binary data (frame)
-        if isinstance(message, bytes):
-            process_frame(message)
+    def print_periodic_stats(self):
+        """Print statistics periodically"""
+        uptime = time.time() - self.start_time
+        logger.info("[STATS] === PERFORMANCE STATS ===")
+        logger.info(f"   [TIME] Uptime: {uptime:.1f}s")
+        logger.info(f"   [RECV] Frames received: {self.frames_received}")
+        logger.info(f"   [PROC] Frames processed: {self.frames_processed}")
+        logger.info(f"   [DET] Detections: R:{self.detection_stats['red']} "
+                    f"Y:{self.detection_stats['yellow']} P:{self.detection_stats['pink']}")
+        logger.info(f"   [FPS] Processing rate: {self.frames_processed/max(uptime,1):.2f} FPS")
+        logger.info(f"   [ERR] Errors: {self.detection_stats['processing_errors']}")
+        logger.info(f"   [MODE] Detection: {'ENABLED' if self.detection_enabled else 'DISABLED'}")
+
+    def on_error(self, ws, error):
+        """Handle WebSocket errors"""
+        logger.error(f"❌ WebSocket error: {error}")
+
+    def on_close(self, ws, close_status_code, close_reason):
+        """Handle WebSocket connection close"""
+        logger.warning(f"🔌 WebSocket connection closed: {close_status_code} - {close_reason}")
+        
+        # Attempt to reconnect after a delay
+        logger.info("⏳ Attempting to reconnect in 5 seconds...")
+        time.sleep(5)
+        self.connect_websocket()
+
+    def run(self):
+        """Main execution loop"""
+        logger.info("🚀 Starting AI Vision Engine...")
+        
+        # Connect to WebSocket server
+        if not self.connect_websocket():
+            logger.error("❌ Failed to establish WebSocket connection")
             return
         
-        # Parse JSON messages
-        data = json.loads(message)
-        print(f"Received message: {data.get('type', 'unknown')}")
+        # Keep the main thread alive
+        try:
+            while True:
+                time.sleep(1)
+                self.print_periodic_stats()
+                
+        except KeyboardInterrupt:
+            logger.info("🛑 Shutting down AI Vision Engine...")
+            if self.ws:
+                self.ws.close()
+
+def main():
+    """Main entry point"""
+    try:
+        # Create and run the AI vision processor
+        processor = AIVisionProcessor()
+        processor.run()
         
-        # Handle control status message
-        if data.get('type') == 'control_status':
-            global AI_CONTROL_ENABLED
-            AI_CONTROL_ENABLED = data.get('enabled', False)
-            print(f"AI control enabled: {AI_CONTROL_ENABLED}")
-        
-        # Handle robot status updates
-        elif data.get('type') == 'robot_status':
-            global robot_status
-            robot_status = data.get('status', {})
-    
     except Exception as e:
-        print(f"Error in message handler: {e}")
-
-def on_error(ws, error):
-    print(f"WebSocket error: {error}")
-
-def on_close(ws, close_status_code=None, close_reason=None):
-    print(f"WebSocket connection closed: {close_status_code}, {close_reason}")
-    # Try to reconnect after a delay
-    time.sleep(5)
-    connect_websocket()
-
-def on_open(ws):
-    print("WebSocket connection established")
-    # Send initial message to server
-    ws.send(json.dumps({
-        "type": "hello",
-        "client": "ai_vision",
-        "version": "1.0"
-    }))
-
-def connect_websocket():
-    global ws_app
-    # Configure WebSocket connection
-    websocket.enableTrace(False)  # Set to True for debugging
-    
-    # Create WebSocket connection
-    ws_app = websocket.WebSocketApp(WS_SERVER,
-                                    on_open=on_open,
-                                    on_message=on_message,
-                                    on_error=on_error,
-                                    on_close=on_close)
-    
-    # Start WebSocket connection in a separate thread
-    ws_thread = threading.Thread(target=ws_app.run_forever)
-    ws_thread.daemon = True
-    ws_thread.start()
-    return ws_thread
+        logger.error(f"💥 Fatal error: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
-    print("Starting AI vision system")
-    
-    try:
-        # Connect to WebSocket server
-        ws_thread = connect_websocket()
-        
-        # Keep the main thread running
-        while True:
-            time.sleep(1)
-            
-    except KeyboardInterrupt:
-        print("Shutting down")
-        if 'ws_app' in globals() and ws_app:
-            ws_app.close()
+    main()

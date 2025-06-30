@@ -5,10 +5,28 @@ import path from 'path';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { promises as fsPromises } from 'fs';
 
 // Get current file directory with ES modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Create logs directory if it doesn't exist
+const LOGS_DIR = path.join(__dirname, 'logs');
+const DETECTION_LOG_PATH = path.join(LOGS_DIR, 'detections.log');
+const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5MB
+
+async function ensureLogsDirectory() {
+  try {
+    await fsPromises.mkdir(LOGS_DIR, { recursive: true });
+    console.log(`Logs directory created at: ${LOGS_DIR}`);
+  } catch (error) {
+    console.error(`Failed to create logs directory: ${error}`);
+  }
+}
+
+// Call this function during initialization
+ensureLogsDirectory();
 
 // Initialize Express app
 const app = express();
@@ -25,12 +43,12 @@ app.get('/', (req, res) => {
 // Initialize WebSocket server
 const wss = new WebSocketServer({ server });
 
-// Store connected clients
-let clients = {
-  robot: null, // ESP8266
-  camera: null,
-  ui: [],
-  ai: null
+// Store connected clients using the improved approach
+const clients = {
+  browsers: new Set(), // Set of browser clients
+  cameras: new Map(),  // Map of camera clients
+  robot: null,         // Single robot connection
+  ai: null             // AI client connection
 };
 
 // Outgoing message queue for robot
@@ -40,58 +58,109 @@ let lastRobotStatus = null;
 
 // Track the latest frame for new UI connections
 let latestFrame = null;
-let latestRobotStatus = null;
 
-// AI control state
+// AI control and monitoring state
 let aiControlEnabled = false;
+let aiProcessHealth = {
+  status: 'disconnected',
+  lastHeartbeat: null,
+  restartCount: 0,
+  lastError: null
+};
 
-// Start the AI vision process
+// AI detection state
+let lastDetection = null;
+let detectionHistory = [];
+const MAX_DETECTION_HISTORY = 50;
+
+// Start the AI vision process with improved monitoring
 let aiProcess = null;
+let aiRestartTimeout = null;
 
 const startAIProcess = () => {
   console.log("Starting AI vision process...");
   
-  // Path to the Python executable and script
+  // Clear any existing restart timeout
+  if (aiRestartTimeout) {
+    clearTimeout(aiRestartTimeout);
+    aiRestartTimeout = null;
+  }
+  
   const pythonPath = process.env.PYTHON_PATH || 'python';
   const scriptPath = path.join(__dirname, 'ai', 'ai_vision.py');
   
   if (!fs.existsSync(scriptPath)) {
     console.error(`AI vision script not found at: ${scriptPath}`);
+    aiProcessHealth.status = 'error';
+    aiProcessHealth.lastError = 'Script not found';
     return;
   }
   
-  // Spawn the process
-  aiProcess = spawn(pythonPath, [scriptPath]);
+  // Set AI process health to starting
+  aiProcessHealth.status = 'starting';
+  aiProcessHealth.restartCount++;
   
-  // Handle stdout data
+  aiProcess = spawn(pythonPath, [scriptPath], {
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  
   aiProcess.stdout.on('data', (data) => {
-    console.log(`AI vision output: ${data}`);
-  });
-  
-  // Handle stderr data
-  aiProcess.stderr.on('data', (data) => {
-    console.error(`AI vision error: ${data}`);
-  });
-  
-  // Handle process exit
-  aiProcess.on('close', (code) => {
-    console.log(`AI vision process exited with code ${code}`);
-    aiProcess = null;
+    const output = data.toString().trim();
+    console.log(`AI vision output: ${output}`);
     
-    // Attempt to restart the process if it crashes
-    if (code !== 0) {
-      console.log("AI process crashed, restarting in 5 seconds...");
-      setTimeout(startAIProcess, 5000);
+    // Update health status based on output
+    if (output.includes('WebSocket connection established')) {
+      aiProcessHealth.status = 'connected';
+      aiProcessHealth.lastHeartbeat = Date.now();
     }
   });
   
-  console.log("AI vision process started");
+  aiProcess.stderr.on('data', (data) => {
+    const error = data.toString().trim();
+    console.error(`AI vision error: ${error}`);
+    aiProcessHealth.lastError = error;
+    
+    // Broadcast error to browsers
+    broadcastToBrowsers({
+      type: 'ai_error',
+      error: error,
+      timestamp: Date.now()
+    });
+  });
+  
+  aiProcess.on('close', (code) => {
+    console.log(`AI vision process exited with code ${code}`);
+    aiProcess = null;
+    aiProcessHealth.status = 'disconnected';
+    
+    // Broadcast disconnection to browsers
+    broadcastToBrowsers({
+      type: 'connection_status',
+      device: 'ai',
+      status: 'disconnected'
+    });
+    
+    if (code !== 0 && aiProcessHealth.restartCount < 5) {
+      console.log(`AI process crashed, restarting in 5 seconds... (attempt ${aiProcessHealth.restartCount + 1}/5)`);
+      aiRestartTimeout = setTimeout(startAIProcess, 5000);
+    } else if (aiProcessHealth.restartCount >= 5) {
+      console.error("AI process failed to start after 5 attempts, giving up");
+      aiProcessHealth.status = 'failed';
+    }
+  });
+  
+  aiProcess.on('error', (error) => {
+    console.error(`Failed to start AI process: ${error}`);
+    aiProcessHealth.status = 'error';
+    aiProcessHealth.lastError = error.message;
+  });
+  
+  console.log(`AI vision process started (PID: ${aiProcess.pid})`);
 };
 
 // Helper function to check if data is binary JPEG
 function isJpegData(data) {
   if (data instanceof Buffer) {
-    // Check for JPEG header signature (FF D8 FF)
     return data.length >= 3 && 
            data[0] === 0xFF && 
            data[1] === 0xD8 && 
@@ -100,229 +169,420 @@ function isJpegData(data) {
   return false;
 }
 
-// Forward messages between clients
-const handleMessage = (message, sender, senderType) => {
-  try {
-    // Check if the message is binary (likely a video frame)
-    // Handle both Node.js Buffer and browser ArrayBuffer
-    if (message instanceof Buffer || 
-        message instanceof ArrayBuffer || 
-        (typeof message === 'object' && message.toString() === '[object ArrayBuffer]') ||
-        isJpegData(message)) {
-      // Convert ArrayBuffer to Buffer if needed
-      const frameBuffer = message instanceof ArrayBuffer ? Buffer.from(message) : message;
-      if (senderType === 'camera') {
-        console.log(`Received binary frame from camera: ${frameBuffer.length} bytes`);
-        latestFrame = frameBuffer;
-        broadcastToUI(frameBuffer);
-        if (clients.ai && clients.ai.readyState === WebSocket.OPEN) {
-          clients.ai.send(frameBuffer, (err) => {
-            if (err) {
-              console.error('Error sending frame to AI client:', err);
-            }
-          });
-        }
-      }
-      return;
-    }
+// Broadcast message to all browser clients
+function broadcastToBrowsers(message) {
+  const messageStr = typeof message === "string" ? message : JSON.stringify(message);
 
-    // For text messages, parse as JSON
-    const jsonData = typeof message === 'string' ? message : message.toString();
-    const data = JSON.parse(jsonData);
-
-    // Add a timestamp and source to the message
-    data.timestamp = data.timestamp || new Date().toISOString();
-    data.source = senderType;
-
-    // Handle robot status messages
-    if (senderType === 'robot' && data.device === 'robot_arm_conveyor') {
-      lastRobotStatus = data;
-      console.log('[ROBOT]', JSON.stringify(data));
-      broadcastToUI({ type: 'robot_status', data });
-      return;
-    }
-
-    // Handle camera metadata
-    if (senderType === 'camera' && data.type === 'frame_metadata') {
-      broadcastToUI(data);
-      if (clients.ai) {
-        clients.ai.send(JSON.stringify(data));
-      }
-    }
-    // Handle AI detection results
-    if (senderType === 'ai' && data.type === 'detection') {
-      console.log(`Received AI detection: ${data.detections.length} objects`);
-      console.log(`Detection data sample:`, JSON.stringify(data.detections[0] || {}));
-      broadcastToUI(data);
-      sendDetectionToRobot(data);
-    }
-    // Handle AI control messages
-    if (data.type === 'ai_control') {
-      aiControlEnabled = data.enabled;
-      console.log(`AI control ${aiControlEnabled ? 'enabled' : 'disabled'}`);
-      if (clients.ai && clients.ai.readyState === WebSocket.OPEN) {
-        clients.ai.send(JSON.stringify({
-          type: 'control_status',
-          enabled: aiControlEnabled
-        }));
-      }
-    }
-  } catch (e) {
-    console.error('Error handling message:', e);
-    // Log more details about the message for debugging
-    console.debug('Message type:', typeof message);
-    if (typeof message === 'object') {
-      console.debug('Object type:', message.constructor.name);
-    }
-  }
-};
-
-// Broadcast message to all UI clients
-const broadcastToUI = message => {
-  if (!clients.ui.length) return;
-  
-  const payload = message instanceof Buffer 
-    ? message 
-    : JSON.stringify(message);
-  
-  let sentCount = 0;
-  clients.ui.forEach(client => {
+  for (const client of clients.browsers) {
     if (client.readyState === WebSocket.OPEN) {
       try {
-        client.send(payload, err => {
+        client.send(messageStr);
+      } catch (error) {
+        console.error('Error sending to browser client:', error);
+      }
+    }
+  }
+}
+
+// Broadcast binary data (like video frames) to browsers
+function broadcastFrameToBrowsers(frameBuffer) {
+  let sentCount = 0;
+  for (const client of clients.browsers) {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(frameBuffer, (err) => {
           if (err) {
-            console.error('Error sending to UI client:', err);
+            console.error('Error sending frame to browser:', err);
           } else {
             sentCount++;
           }
         });
-      } catch (e) {
-        console.error('Exception sending to UI client:', e);
+      } catch (error) {
+        console.error('Exception sending frame to browser:', error);
       }
     }
-  });
-  
-  // Log only for binary messages to avoid console spam
-  if (message instanceof Buffer) {
-    console.log(`Broadcasted ${message.length} bytes to ${sentCount}/${clients.ui.length} UI clients`);
   }
-};
+  
+  
+}
 
-// Helper function to send detection results to robot
+// Enhanced detection handling for robot
 const sendDetectionToRobot = (detectionData) => {
-  if (clients.robot && clients.robot.readyState === WebSocket.OPEN) {
-    // Extract dominant color from detection data
-    let dominantColor = 'unknown';
-    if (detectionData.detections && detectionData.detections.length > 0) {
-      const detection = detectionData.detections[0];
-      if (detection.color) {
-        dominantColor = detection.color.toLowerCase();
-      }
+  if (!clients.robot || clients.robot.readyState !== WebSocket.OPEN) {
+    console.log("Robot not connected, cannot send detection");
+    
+    // Notify browsers about missing robot connection
+    broadcastToBrowsers({
+      type: 'service_warning',
+      service: 'robot',
+      message: 'Robot not connected - cannot send detection command',
+      timestamp: Date.now()
+    });
+    
+    return;
+  }
+  
+  // Extract the most confident detection
+  let dominantColor = 'unknown';
+  let confidence = 0;
+  
+  if (detectionData.detections && detectionData.detections.length > 0) {
+    const detection = detectionData.detections[0];
+    dominantColor = detection.color.toLowerCase();
+    confidence = detection.confidence || 0;
+    
+    // Store detection in history
+    const detectionRecord = {
+      color: dominantColor,
+      confidence: confidence,
+      timestamp: Date.now(),
+      area: detection.area || 0
+    };
+    
+    detectionHistory.unshift(detectionRecord);
+    if (detectionHistory.length > MAX_DETECTION_HISTORY) {
+      detectionHistory.pop();
     }
     
+    lastDetection = detectionRecord;
+  }
+  
+  // Only send to robot if confidence is above threshold
+  if (confidence > 0.5 && aiControlEnabled) {
     const robotMessage = {
       detection: {
         color: dominantColor,
-        confidence: detectionData.detections?.[0]?.confidence || 0,
+        confidence: confidence,
         timestamp: new Date().toISOString()
       }
     };
     
-    clients.robot.send(JSON.stringify(robotMessage));
-    console.log(`Sent detection to robot: ${dominantColor}`);
-  } else {
-    console.log("Robot not connected, cannot send detection");
+    try {
+      clients.robot.send(JSON.stringify(robotMessage));
+      console.log(`Sent detection to robot: ${dominantColor} (confidence: ${confidence.toFixed(3)})`);
+    } catch (error) {
+      console.error('Error sending detection to robot:', error);
+      
+      // Notify browsers about the error
+      broadcastToBrowsers({
+        type: 'service_error',
+        service: 'robot',
+        message: `Failed to send detection to robot: ${error.message}`,
+        timestamp: Date.now()
+      });
+    }
   }
 };
 
 // Handle WebSocket connections
 wss.on('connection', (ws, req) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  const clientType = url.searchParams.get('type');
+  const clientIp = req.socket.remoteAddress;
+  
+  // Parse URL parameters
+  const url = new URL(`http://localhost${req.url}`);
+  const clientType = url.searchParams.get('type') || 'browser';
 
-  console.log(`New WebSocket connection: ${clientType} from ${req.socket.remoteAddress}`);
+  console.log(`New ${clientType} connection from ${clientIp}`);
 
-  ws.binaryType = 'arraybuffer';
-
-  // Register the client based on type
-  switch (clientType) {
-    case 'robot':
-      if (clients.robot && clients.robot.readyState === ws.OPEN) {
-        // Only one robot allowed; close previous
-        clients.robot.close();
-      }
-      clients.robot = ws;
-      robotReady = true;
-      // Send any queued messages
-      while (robotMessageQueue.length > 0) {
-        const msg = robotMessageQueue.shift();
-        try { ws.send(msg); } catch (e) { console.error('Failed to send queued msg:', e); }
-      }
-      broadcastToUI({
-        type: 'connection_status',
-        device: 'robot',
-        status: 'connected'
-      });
-      break;
-    case 'camera':
-      clients.camera = ws;
-      broadcastToUI({ type: 'connection_status', device: 'camera', status: 'connected' });
-      break;
-    case 'ui':
-      clients.ui.push(ws);
-      // Send current connection statuses
-      ws.send(JSON.stringify({ type: 'connection_status', device: 'robot', status: clients.robot ? 'connected' : 'disconnected' }));
-      ws.send(JSON.stringify({ type: 'connection_status', device: 'camera', status: clients.camera ? 'connected' : 'disconnected' }));
-      ws.send(JSON.stringify({ type: 'connection_status', device: 'ai', status: clients.ai ? 'connected' : 'disconnected' }));
-      if (lastRobotStatus) {
-        ws.send(JSON.stringify({ type: 'robot_status', data: lastRobotStatus }));
-      }
-      if (latestFrame) {
-        ws.send(latestFrame);
-      }
-      break;
-    case 'ai':
-      clients.ai = ws;
-      broadcastToUI({ type: 'connection_status', device: 'ai', status: 'connected' });
-      break;
-    default:
-      console.log(`Unknown client type: ${clientType}`);
+  // Send immediate acknowledgement to client
+  try {
+    ws.send(JSON.stringify({
+      type: "connection_ack",
+      message: "Connected to server",
+      timestamp: Date.now()
+    }));
+  } catch (err) {
+    console.error("Error sending connection acknowledgement:", err);
   }
 
-  ws.on('message', (message) => {
+  // Set up ping interval for connection health
+  const pingInterval = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.ping();
+    }
+  }, 30000);
+
+  // Handle client type assignment
+  if (clientType === 'browser' || clientType === 'ui') {
+    clients.browsers.add(ws);
+    console.log(`Browser client connected. Total browsers: ${clients.browsers.size}`);
+    
+    // Send current connection statuses to new browser client
+    const connectionStatus = {
+      robot: clients.robot ? 'connected' : 'disconnected',
+      camera: clients.cameras.size > 0 ? 'connected' : 'disconnected',
+      ai: clients.ai ? 'connected' : 'disconnected'
+    };
+    
+    ws.send(JSON.stringify({ type: 'connection_status_all', status: connectionStatus }));
+    
+    // Send AI process health
+    ws.send(JSON.stringify({ 
+      type: 'ai_health', 
+      health: aiProcessHealth,
+      aiControlEnabled: aiControlEnabled
+    }));
+    
+    // Send last detection if available
+    if (lastDetection) {
+      ws.send(JSON.stringify({ type: 'last_detection', detection: lastDetection }));
+    }
+    
+    // Send detection history
+    ws.send(JSON.stringify({ 
+      type: 'detection_history', 
+      history: detectionHistory.slice(0, 10) // Last 10 detections
+    }));
+    
+    if (lastRobotStatus) {
+      ws.send(JSON.stringify({ type: 'robot_status', data: lastRobotStatus }));
+    }
+    if (latestFrame) {
+      ws.send(latestFrame);
+    }
+  } else if (clientType === 'camera') {
+    const cameraId = url.searchParams.get('id') || `camera-${Date.now()}`;
+    clients.cameras.set(cameraId, ws);
+    console.log(`Camera ${cameraId} connected. Total cameras: ${clients.cameras.size}`);
+    
+    // Notify browsers about camera connection
+    broadcastToBrowsers({
+      type: 'connection_status',
+      device: 'camera',
+      status: 'connected'
+    });
+  } else if (clientType === 'robot') {
+    if (clients.robot && clients.robot.readyState === WebSocket.OPEN) {
+      clients.robot.close();
+    }
+    clients.robot = ws;
+    robotReady = true;
+    
+    // Send any queued messages
+    while (robotMessageQueue.length > 0) {
+      const msg = robotMessageQueue.shift();
+      try { ws.send(msg); } catch (e) { console.error('Failed to send queued msg:', e); }
+    }
+    
+    broadcastToBrowsers({
+      type: 'connection_status',
+      device: 'robot',
+      status: 'connected'
+    });
+  } else if (clientType === 'ai') {
+    clients.ai = ws;
+    aiProcessHealth.status = 'connected';
+    aiProcessHealth.lastHeartbeat = Date.now();
+    
+    console.log('AI client connected via WebSocket');
+    
+    broadcastToBrowsers({ 
+      type: 'connection_status', 
+      device: 'ai', 
+      status: 'connected' 
+    });
+    
+    // Send AI control status
+    ws.send(JSON.stringify({
+      type: 'control_status',
+      enabled: aiControlEnabled
+    }));
+  } else {
+    console.log(`Unknown client type: ${clientType}`);
+  }
+
+  // Handle incoming messages
+  ws.on('message', async (message) => {
     try {
-      handleMessage(message, ws, clientType);
-    } catch (e) {
-      console.error(`Error handling message from ${clientType}:`, e);
+      // Check if message is binary (Buffer) or text (String)
+      if (Buffer.isBuffer(message)) {
+        // Handle binary data (like camera frames)
+        if (clientType === 'camera') {
+       
+          
+          // Store latest frame for new connections
+          latestFrame = message;
+          
+          // Broadcast frame to all browser clients
+          broadcastFrameToBrowsers(message);
+          
+          // Forward to AI if connected and enabled
+          if (clients.ai && clients.ai.readyState === WebSocket.OPEN && aiControlEnabled) {
+            try {
+              clients.ai.send(message);
+              aiProcessHealth.lastHeartbeat = Date.now();
+            } catch (aiError) {
+              console.error('Error forwarding frame to AI:', aiError);
+              aiProcessHealth.lastError = aiError.message;
+            }
+          }
+        }
+      } else {
+        // Handle text messages (usually JSON)
+        const data = JSON.parse(message.toString());
+        console.log(`Received message from ${clientType}:`, data.type || 'unknown');
+        
+        // Handle different message types
+        switch (data.type) {
+          case 'ai_init':
+            if (clientType === 'ai') {
+              console.log('AI Engine initialized:', data.capabilities);
+              broadcastToBrowsers({
+                type: 'ai_initialized',
+                capabilities: data.capabilities,
+                colors: data.colors,
+                timestamp: data.timestamp
+              });
+            }
+            break;
+            
+          case 'camera_info':
+            // Forward camera info to browsers
+            broadcastToBrowsers(data);
+            break;
+            
+          case 'frame_metadata':
+            // Forward frame metadata to browsers and AI
+            broadcastToBrowsers(data);
+            if (clients.ai && clients.ai.readyState === WebSocket.OPEN) {
+              clients.ai.send(JSON.stringify(data));
+            }
+            break;
+            
+          case 'detection':
+            // Handle AI detection results
+            if (clientType === 'ai') {
+              console.log(`Received AI detection: ${data.detections?.length || 0} objects`);
+              
+              // Update AI health
+              aiProcessHealth.lastHeartbeat = Date.now();
+              
+              // Broadcast to browsers with enhanced data
+              const enhancedDetection = {
+                ...data,
+                aiHealth: aiProcessHealth.status,
+                processingEnabled: aiControlEnabled
+              };
+              broadcastToBrowsers(enhancedDetection);
+              
+              // Send to robot if enabled
+              if (aiControlEnabled) {
+                sendDetectionToRobot(data);
+              }
+            }
+            break;
+            
+          case 'ai_statistics':
+            if (clientType === 'ai') {
+              console.log('Received AI statistics:', data.stats);
+              broadcastToBrowsers({
+                type: 'ai_statistics',
+                stats: data.stats,
+                processing_rate: data.processing_rate,
+                timestamp: data.timestamp
+              });
+            }
+            break;
+            
+          case 'robot_status':
+            // Handle robot status updates
+            if (clientType === 'robot') {
+              lastRobotStatus = data;
+              broadcastToBrowsers({ type: 'robot_status', data });
+            }
+            break;
+            
+          case 'ai_control':
+            // Handle AI control messages from browsers
+            aiControlEnabled = data.enabled;
+            console.log(`AI control ${aiControlEnabled ? 'enabled' : 'disabled'}`);
+            
+            // Notify AI process
+            if (clients.ai && clients.ai.readyState === WebSocket.OPEN) {
+              clients.ai.send(JSON.stringify({
+                type: 'control_status',
+                enabled: aiControlEnabled
+              }));
+            }
+            
+            // Broadcast to all browsers
+            broadcastToBrowsers({
+              type: 'ai_control_status',
+              enabled: aiControlEnabled,
+              timestamp: Date.now()
+            });
+            break;
+            
+          case 'get_ai_stats':
+            // Request statistics from AI
+            if (clients.ai && clients.ai.readyState === WebSocket.OPEN) {
+              clients.ai.send(JSON.stringify({ type: 'get_stats' }));
+            }
+            break;
+            
+          default:
+            // Forward other messages to browsers
+            if (clientType === 'robot' && data.device === 'robot_arm_conveyor') {
+              lastRobotStatus = data;
+              broadcastToBrowsers({ type: 'robot_status', data });
+            }
+        }
+      }
+    } catch (error) {
+      console.error(`Error processing message from ${clientType}:`, error);
     }
   });
 
+  // Handle WebSocket close
   ws.on('close', () => {
+    clearInterval(pingInterval);
     console.log(`${clientType} client disconnected`);
-    switch (clientType) {
-      case 'camera':
-        clients.camera = null;
-        break;
-      case 'robot':
-        if (clients.robot === ws) {
-          clients.robot = null;
-          robotReady = false;
+    
+    if (clients.browsers.has(ws)) {
+      clients.browsers.delete(ws);
+      console.log(`Browser client disconnected. Remaining: ${clients.browsers.size}`);
+    } else if (clientType === 'camera') {
+      // Find and remove camera client
+      for (const [id, camera] of clients.cameras.entries()) {
+        if (camera === ws) {
+          clients.cameras.delete(id);
+          console.log(`Camera ${id} disconnected. Remaining: ${clients.cameras.size}`);
+          broadcastToBrowsers({
+            type: 'connection_status',
+            device: 'camera',
+            status: clients.cameras.size > 0 ? 'connected' : 'disconnected'
+          });
+          break;
         }
-        break;
-      case 'ai':
-        clients.ai = null;
-        break;
-      case 'ui':
-        clients.ui = clients.ui.filter(client => client !== ws);
-        break;
+      }
+    } else if (clientType === 'robot') {
+      if (clients.robot === ws) {
+        clients.robot = null;
+        robotReady = false;
+        broadcastToBrowsers({
+          type: 'connection_status',
+          device: 'robot',
+          status: 'disconnected'
+        });
+      }
+    } else if (clientType === 'ai') {
+      clients.ai = null;
+      aiProcessHealth.status = 'disconnected';
+      broadcastToBrowsers({ 
+        type: 'connection_status', 
+        device: 'ai', 
+        status: 'disconnected' 
+      });
     }
-    if (clientType && clientType !== 'ui') {
-      broadcastToUI({ type: 'connection_status', device: clientType, status: 'disconnected' });
-    }
+  });
+
+  // Handle WebSocket errors
+  ws.on('error', (error) => {
+    console.error(`WebSocket error for ${clientType}:`, error);
   });
 });
 
-// REST API: Send commands to robot (ESP8266)
+// REST API routes
 app.use(express.json());
 
 // POST /api/robot/command
@@ -331,18 +591,29 @@ app.post('/api/robot/command', (req, res) => {
   if (!command || typeof command !== 'object') {
     return res.status(400).json({ error: 'Invalid command' });
   }
+  
+  // Check if robot is connected
+  if (!clients.robot || clients.robot.readyState !== WebSocket.OPEN) {
+    return res.status(503).json({ 
+      error: 'Robot not connected', 
+      message: 'Cannot send commands when robot is offline',
+      status: 'disconnected'
+    });
+  }
+  
   const msg = JSON.stringify(command);
-  if (clients.robot && clients.robot.readyState === clients.robot.OPEN) {
-    try {
-      clients.robot.send(msg);
-      return res.json({ status: 'sent' });
-    } catch (e) {
-      robotMessageQueue.push(msg);
-      return res.status(500).json({ error: 'Failed to send, queued' });
-    }
-  } else {
-    robotMessageQueue.push(msg);
-    return res.json({ status: 'queued' });
+  try {
+    clients.robot.send(msg);
+    return res.json({ 
+      status: 'sent',
+      timestamp: Date.now()
+    });
+  } catch (e) {
+    console.error('Failed to send command to robot:', e);
+    return res.status(500).json({ 
+      error: 'Failed to send command',
+      message: e.message
+    });
   }
 });
 
@@ -355,29 +626,156 @@ app.get('/api/robot/status', (req, res) => {
   }
 });
 
-// Modify the server startup section
-const startServer = (port) => {
-  server.listen(port, () => {
-    console.log(`Server listening on port ${port}`);
-    console.log(`WebSocket server ready for connections`);
-  }).on('error', (error) => {
-    console.error(`Failed to start server on port ${port}:`, error);
-    
-    if (error.code === 'EACCES') {
-      console.error(`Permission denied. Try running with elevated privileges or use a port > 1024.`);
-    } else if (error.code === 'EADDRINUSE') {
-      console.error(`Port ${port} is already in use. Try a different port.`);
-    }
-    
-    // Exit with error code
-    process.exit(1);
+// GET /api/ai/health - New endpoint for AI health monitoring
+app.get('/api/ai/health', (req, res) => {
+  res.json({
+    health: aiProcessHealth,
+    controlEnabled: aiControlEnabled,
+    lastDetection: lastDetection,
+    detectionCount: detectionHistory.length
   });
-};
+});
+
+// POST /api/ai/control - New endpoint for AI control
+app.post('/api/ai/control', (req, res) => {
+  const { enabled } = req.body;
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'enabled must be boolean' });
+  }
+  
+  // Check if AI client is connected before enabling control
+  if (enabled && (!clients.ai || clients.ai.readyState !== WebSocket.OPEN)) {
+    return res.status(503).json({
+      error: 'AI client not connected',
+      message: 'Cannot enable AI control when AI service is not connected'
+    });
+  }
+  
+  // Set the control state
+  aiControlEnabled = enabled;
+  console.log(`AI control set to ${aiControlEnabled ? 'ENABLED' : 'DISABLED'} via REST API`);
+  
+  // Notify AI process with enhanced error handling
+  if (clients.ai && clients.ai.readyState === WebSocket.OPEN) {
+    try {
+      const controlMsg = JSON.stringify({
+        type: 'control_status',
+        enabled: aiControlEnabled
+      });
+      
+      clients.ai.send(controlMsg);
+      console.log(`Sent control_status to AI client: ${controlMsg}`);
+    } catch (error) {
+      console.error(`Failed to send control message to AI: ${error.message}`);
+      return res.status(500).json({ 
+        error: 'Failed to communicate with AI process',
+        message: error.message
+      });
+    }
+  } else {
+    console.warn('AI client not available to receive control message');
+  }
+  
+  // Broadcast to browsers
+  broadcastToBrowsers({
+    type: 'ai_control_status',
+    enabled: aiControlEnabled,
+    timestamp: Date.now()
+  });
+  
+  // Always return a response
+  return res.json({ 
+    status: 'updated', 
+    enabled: aiControlEnabled,
+    timestamp: Date.now() 
+  });
+});
+
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({
+    server: 'online',
+    connections: {
+      browsers: clients.browsers.size,
+      cameras: clients.cameras.size,
+      robot: clients.robot ? 'connected' : 'disconnected',
+      ai: clients.ai ? 'connected' : 'disconnected'
+    },
+    ai: aiProcessHealth,
+    aiControl: aiControlEnabled
+  });
+});
 
 // Start the server
 const PORT = process.env.PORT || 3000;
-console.log(`Attempting to start server on port ${PORT}...`);
-startServer(PORT);
+server.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
+  console.log(`WebSocket server ready for connections`);
+  console.log(`Access the dashboard at http://localhost:${PORT}`);
+}).on('error', (error) => {
+  console.error(`Failed to start server on port ${PORT}:`, error);
+  process.exit(1);
+});
 
 // Start the AI process when the server starts
 startAIProcess();
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('Received SIGTERM, shutting down gracefully...');
+  if (aiProcess) {
+    aiProcess.kill('SIGTERM');
+  }
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('Received SIGINT, shutting down gracefully...');
+  if (aiProcess) {
+    aiProcess.kill('SIGTERM');
+  }
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
+
+// Function to log AI detections to file with rotation
+async function logDetection(detection) {
+  try {
+    // Create log entry
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      color: detection.color || 'unknown',
+      confidence: detection.confidence || 0,
+      area: detection.area || 0
+    };
+    
+    const logLine = JSON.stringify(logEntry) + '\n';
+    
+    // Check if file exists and its size
+    let stats;
+    try {
+      stats = await fsPromises.stat(DETECTION_LOG_PATH);
+    } catch (error) {
+      // File doesn't exist yet, which is fine
+    }
+    
+    // If file exists and exceeds max size, rotate it
+    if (stats && stats.size > MAX_LOG_SIZE) {
+      console.log(`Detection log exceeds ${MAX_LOG_SIZE/1024/1024}MB, rotating...`);
+      const backupPath = `${DETECTION_LOG_PATH}.${Date.now()}.bak`;
+      await fsPromises.rename(DETECTION_LOG_PATH, backupPath);
+      console.log(`Rotated detection log to: ${backupPath}`);
+    }
+    
+    // Append to log file
+    await fsPromises.appendFile(DETECTION_LOG_PATH, logLine);
+    
+  } catch (error) {
+    console.error(`Error logging detection: ${error}`);
+  }
+}

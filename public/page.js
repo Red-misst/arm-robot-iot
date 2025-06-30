@@ -1,4 +1,4 @@
-// Robot Arm Sorting System - Frontend Logic (No Conveyor)
+// Robot Arm Sorting System - Frontend Logic (Updated for new server approach)
 
 // Global variables
 let ws;
@@ -64,134 +64,113 @@ const setupEventListeners = () => {
             });
         }
     }
-    
-    // Named position buttons
-    document.getElementById('namedPosRest').addEventListener('click', () => {
-        sendRobotApiCommand({ armPosition: "rest" });
-        addLogEntry('Moving to REST position');
-    });
-    
-    document.getElementById('namedPosCenter').addEventListener('click', () => {
-        sendRobotApiCommand({ armPosition: "center" });
-        addLogEntry('Moving to CENTER position');
-    });
-    
-    document.getElementById('namedPosRed').addEventListener('click', () => {
-        sendRobotApiCommand({ armPosition: "red_bin" });
-        addLogEntry('Moving to RED BIN position');
-    });
-    
-    document.getElementById('namedPosGreen').addEventListener('click', () => {
-        sendRobotApiCommand({ armPosition: "green_bin" });
-        addLogEntry('Moving to GREEN BIN position');
-    });
-    
-    document.getElementById('namedPosBlue').addEventListener('click', () => {
-        sendRobotApiCommand({ armPosition: "blue_bin" });
-        addLogEntry('Moving to BLUE BIN position');
-    });
-    
-    // AI control toggle button
-    document.getElementById('toggleAI').addEventListener('click', () => {
-        aiControlEnabled = !aiControlEnabled;
-        
-        const toggleBtn = document.getElementById('toggleAI');
-        const statusSpan = document.getElementById('aiStatus');
-        
-        if (aiControlEnabled) {
-            toggleBtn.classList.remove('bg-robot-purple-600', 'hover:bg-robot-purple-700');
-            toggleBtn.classList.add('bg-red-600', 'hover:bg-red-700');
-            toggleBtn.textContent = 'Disable AI Control';
-            statusSpan.textContent = 'AI control is enabled';
-            addLogEntry('AI control enabled', 'system');
-        } else {
-            toggleBtn.classList.remove('bg-red-600', 'hover:bg-red-700');
-            toggleBtn.classList.add('bg-robot-purple-600', 'hover:bg-robot-purple-700');
-            toggleBtn.textContent = 'Enable AI Control';
-            statusSpan.textContent = 'AI control is disabled';
-            addLogEntry('AI control disabled', 'system');
-        }
-        
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'ai_control', enabled: aiControlEnabled }));
+
+    // Position buttons
+    ['rest', 'pickup', 'red_bin', 'green_bin', 'blue_bin'].forEach(position => {
+        const button = document.getElementById(`${position}Btn`);
+        if (button) {
+            button.addEventListener('click', () => {
+                sendRobotApiCommand({
+                    armPosition: position
+                });
+                addLogEntry(`Moving to ${position} position`);
+            });
         }
     });
-    
-    // Sorting action buttons
-    document.getElementById('sequenceSort').addEventListener('click', () => {
-        if (latestDetections && latestDetections.length > 0) {
-            const color = latestDetections[0].color || 'unknown';
-            executeSortingSequence(color);
-        } else {
-            addLogEntry('No objects detected to sort', 'warning');
-        }
-    });
-    
-    document.getElementById('sequenceReset').addEventListener('click', () => {
-        sendRobotApiCommand({ armPosition: "rest" });
-        addLogEntry('Resetting arm position', 'system');
-    });
-    
-    document.getElementById('sequenceDemo').addEventListener('click', () => {
-        executeDemoSequence();
-    });
-    
-    // Clear log button
-    document.getElementById('clearLog').addEventListener('click', () => {
-        document.getElementById('logContainer').innerHTML = '';
-        addLogEntry('Log cleared', 'system');
-    });
-    
-    console.log('Event listeners setup complete');
+
+    // Demo sequence button
+    const demoBtn = document.getElementById('demoBtn');
+    if (demoBtn) {
+        demoBtn.addEventListener('click', executeDemoSequence);
+    }
+
+    // AI control toggle
+    const toggleAI = document.getElementById('toggleAI');
+    if (toggleAI) {
+        toggleAI.addEventListener('click', async function() {
+            try {
+                // Use REST API approach for more reliable toggling
+                const response = await fetch('/api/ai/control', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ enabled: !aiControlEnabled })
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.message || 'Failed to toggle AI control');
+                }
+                
+                const result = await response.json();
+                aiControlEnabled = result.enabled;
+                
+                // Update button text and status display
+                this.textContent = aiControlEnabled ? 'Disable AI Control' : 'Enable AI Control';
+                const aiStatusEl = document.getElementById('aiStatus');
+                if (aiStatusEl) {
+                    aiStatusEl.textContent = `AI control is ${aiControlEnabled ? 'enabled' : 'disabled'}`;
+                }
+                
+                addLogEntry(`AI control ${aiControlEnabled ? 'enabled' : 'disabled'}`, 'system');
+                console.log(`AI control set to: ${aiControlEnabled}`);
+                
+            } catch (error) {
+                console.error('Error toggling AI control:', error);
+                addLogEntry(`Failed to toggle AI control: ${error.message}`, 'error');
+                // Show error to user
+                alert(`Failed to toggle AI: ${error.message}`);
+            }
+        });
+    }
 };
 
-// Execute sorting sequence for detected color
+// Execute sorting sequence based on detected color
 function executeSortingSequence(color) {
-    addLogEntry(`Starting sorting sequence for ${color} object`, 'system');
+    if (!aiControlEnabled) return;
     
-    sendRobotApiCommand({
-        detection: {
-            color: color,
-            confidence: latestDetections?.length > 0 ? (latestDetections[0].confidence || 0.8) : 0.5,
-            timestamp: new Date().toISOString()
-        }
-    });
+    const colorMap = {
+        'red': 'red_bin',
+        'green': 'green_bin', 
+        'blue': 'blue_bin'
+    };
     
-    objectsSorted++;
-    document.getElementById('objectsSorted').textContent = objectsSorted;
-    document.getElementById('lastColor').textContent = color;
+    const targetPosition = colorMap[color.toLowerCase()];
+    if (targetPosition) {
+        addLogEntry(`Executing sorting sequence for ${color}`, 'ai');
+        
+        // Sequence: pickup -> target bin -> rest
+        setTimeout(() => sendRobotApiCommand({ armPosition: 'pickup' }), 100);
+        setTimeout(() => sendRobotApiCommand({ armPosition: targetPosition }), 2000);
+        setTimeout(() => sendRobotApiCommand({ armPosition: 'rest' }), 4000);
+        
+        objectsSorted++;
+        document.getElementById('objectsSorted').textContent = objectsSorted;
+    }
 }
 
 // Execute demo sequence showing all positions
 function executeDemoSequence() {
-    addLogEntry('Starting demo sequence', 'system');
+    const positions = ['pickup', 'red_bin', 'green_bin', 'blue_bin', 'rest'];
+    let delay = 0;
     
-    const positions = ['center', 'red_bin', 'green_bin', 'blue_bin', 'rest'];
-    let currentIndex = 0;
-    
-    function moveToNextPosition() {
-        if (currentIndex < positions.length) {
-            const position = positions[currentIndex];
+    positions.forEach((position, index) => {
+        setTimeout(() => {
             sendRobotApiCommand({ armPosition: position });
-            addLogEntry(`Demo: Moving to ${position.toUpperCase()}`, 'sequence');
-            currentIndex++;
-            
-            setTimeout(moveToNextPosition, 2000);
-        } else {
-            addLogEntry('Demo sequence complete', 'system');
-        }
-    }
-    
-    moveToNextPosition();
+            addLogEntry(`Demo: Moving to ${position}`, 'system');
+        }, delay);
+        delay += 2000;
+    });
 }
 
-// Connect to WebSocket server
+// Connect to WebSocket server with improved error handling
 function connectWebSocket() {
     if (ws) ws.close();
     
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host || 'localhost:3000';
-    ws = new WebSocket(`${protocol}//${host}/?type=ui`);
+    ws = new WebSocket(`${protocol}//${host}/?type=browser`);  // Updated to use 'browser' type
     
     ws.binaryType = 'arraybuffer';
     
@@ -200,28 +179,34 @@ function connectWebSocket() {
         console.log('WebSocket connected');
     };
     
-    ws.onclose = () => {
-        addLogEntry('Disconnected from server', 'error');
-        document.getElementById('robotStatus').classList.remove('bg-green-500');
-        document.getElementById('robotStatus').classList.add('bg-red-500');
-        document.getElementById('cameraStatus').classList.remove('bg-green-500');
-        document.getElementById('cameraStatus').classList.add('bg-red-500');
+    ws.onclose = (event) => {
+        addLogEntry(`Disconnected from server (${event.code})`, 'error');
+        console.log('WebSocket disconnected, code:', event.code);
         
+        // Update connection status indicators
+        document.getElementById('robotStatus')?.classList.remove('bg-green-500');
+        document.getElementById('robotStatus')?.classList.add('bg-red-500');
+        document.getElementById('cameraStatus')?.classList.remove('bg-green-500');
+        document.getElementById('cameraStatus')?.classList.add('bg-red-500');
+        
+        // Attempt to reconnect after 5 seconds
         setTimeout(connectWebSocket, 5000);
     };
     
     ws.onmessage = (event) => {
-        if (event.data instanceof Blob || event.data instanceof ArrayBuffer) {
-            const blob = event.data instanceof ArrayBuffer 
-                ? new Blob([event.data], {type: 'image/jpeg'}) 
-                : event.data;
-            
-            handleVideoFrame(blob);
-            drawDetections(latestDetections);
-            return;
-        }
-        
         try {
+            // Handle binary data (video frames)
+            if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
+                const blob = event.data instanceof ArrayBuffer 
+                    ? new Blob([event.data], {type: 'image/jpeg'}) 
+                    : event.data;
+                
+                handleVideoFrame(blob);
+                drawDetections(latestDetections);
+                return;
+            }
+            
+            // Handle JSON messages
             const data = JSON.parse(event.data);
             handleMessage(data);
         } catch (e) {
@@ -235,7 +220,7 @@ function connectWebSocket() {
     };
 }
 
-// Handle video frames
+// Handle video frames with improved error handling
 function handleVideoFrame(blob) {
     const url = URL.createObjectURL(blob);
     const img = new Image();
@@ -245,6 +230,7 @@ function handleVideoFrame(blob) {
             videoCtx.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
             videoCtx.drawImage(img, 0, 0, videoCanvas.width, videoCanvas.height);
             
+            // Log frame info periodically
             if (frameCount % 30 === 0) {
                 console.log(`Frame #${frameCount}, size: ${blob.size} bytes`);
             }
@@ -265,129 +251,117 @@ function handleVideoFrame(blob) {
     img.src = url;
 }
 
-// Handle JSON messages
+// Handle JSON messages with improved message routing
 function handleMessage(data) {
     console.log('Received message type:', data.type);
     
     switch (data.type) {
+        case 'connection_ack':
+            console.log('Server acknowledged connection');
+            break;
+            
         case 'connection_status':
             handleConnectionStatus(data);
             break;
+            
         case 'camera_info':
-            document.getElementById('cameraInfo').textContent = 
-                `${data.id || 'Camera'} - ${data.resolution || '640x480'} @ ${data.fps || '30'}fps`;
-            addLogEntry(`Camera connected: ${data.id || 'Camera'}`, 'system');
+            handleCameraInfo(data);
             break;
+            
+        case 'frame_metadata':
+            // Handle frame metadata if needed
+            break;
+            
         case 'detection':
-            latestDetections = data.detections || [];
-            updateDetectionInfo(data.detections || []);
-            drawDetections(data.detections || []);
-            addLogEntry(`Detected ${latestDetections.length} objects`, 'ai');
+            handleDetection(data);
             break;
+            
         case 'robot_status':
-            updateRobotStatus(data.data);
+            updateRobotStatus(data.data || data);
             break;
+            
         default:
-            if (data.device === 'robot_arm') {
+            // Handle robot arm messages
+            if (data.device === 'robot_arm' || data.device === 'robot_arm_conveyor') {
                 updateRobotStatus(data);
             }
+    }
+}
+
+// Handle camera info messages
+function handleCameraInfo(data) {
+    const cameraInfoElement = document.getElementById('cameraInfo');
+    if (cameraInfoElement) {
+        cameraInfoElement.textContent = 
+            `${data.id || 'Camera'} - ${data.resolution || '640x480'} @ ${data.fps || '30'}fps`;
+    }
+    addLogEntry(`Camera connected: ${data.id || 'Camera'}`, 'system');
+}
+
+// Handle detection results
+function handleDetection(data) {
+    latestDetections = data.detections || [];
+    updateDetectionInfo(data.detections || []);
+    drawDetections(data.detections || []);
+    addLogEntry(`Detected ${latestDetections.length} objects`, 'ai');
+    
+    // Execute sorting if AI control is enabled and objects detected
+    if (aiControlEnabled && latestDetections.length > 0) {
+        const firstDetection = latestDetections[0];
+        if (firstDetection.color) {
+            executeSortingSequence(firstDetection.color);
+        }
     }
 }
 
 // Update detection info display
 function updateDetectionInfo(detections) {
     const detectionInfo = document.getElementById('detectionInfo');
+    if (!detectionInfo) return;
     
-    if (!detections || detections.length === 0) {
-        detectionInfo.innerHTML = 'No objects detected';
-        return;
-    }
-    
-    const counts = {};
-    detections.forEach(detection => {
-        const type = detection.color || detection.class || 'unknown';
-        counts[type] = (counts[type] || 0) + 1;
-    });
-    
-    let html = '<ul class="list-disc pl-5 space-y-1">';
-    Object.entries(counts).forEach(([type, count]) => {
-        const color = detectionColors[type] || detectionColors.default;
-        html += `<li>
-            <span class="inline-block w-3 h-3 rounded-full mr-2" style="background-color: ${color};"></span>
-            ${type}: ${count}
-        </li>`;
-    });
-    html += '</ul>';
-    
-    detectionInfo.innerHTML = html;
-    
-    if (detections.length > 0 && detections[0].color) {
-        const lastColor = detections[0].color.toLowerCase();
-        const colorElement = document.getElementById('lastDetectedColor');
-        const colorLabel = document.getElementById('lastDetectedColorLabel');
-        
-        if (colorElement && colorLabel) {
-            colorElement.style.backgroundColor = detectionColors[lastColor] || '#808080';
-            colorLabel.textContent = lastColor || 'Unknown';
-        }
+    if (detections && detections.length > 0) {
+        const detection = detections[0];
+        const confidence = (detection.confidence * 100).toFixed(1);
+        detectionInfo.innerHTML = `
+            <strong>Object:</strong> ${detection.class || 'Unknown'}<br>
+            <strong>Color:</strong> ${detection.color || 'Unknown'}<br>
+            <strong>Confidence:</strong> ${confidence}%<br>
+            <strong>Position:</strong> (${detection.bbox?.[0]?.toFixed(0) || 0}, ${detection.bbox?.[1]?.toFixed(0) || 0})
+        `;
+    } else {
+        detectionInfo.textContent = 'No objects detected';
     }
 }
 
 // Draw detections on overlay canvas
 function drawDetections(detections) {
+    if (!overlayCtx) return;
+    
     overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
     
-    if (!detections || !detections.length) return;
-    
-    overlayCtx.lineWidth = 3;
-    overlayCtx.font = 'bold 16px system-ui';
+    if (!detections || detections.length === 0) return;
     
     detections.forEach(detection => {
-        if (!detection.bbox) return;
-        
-        let color = detectionColors.default;
-        if (detection.color && detectionColors[detection.color]) {
-            color = detectionColors[detection.color];
-        } else if (detection.class && detectionColors[detection.class]) {
-            color = detectionColors[detection.class];
-        }
-        
-        const x = detection.bbox.x * overlayCanvas.width;
-        const y = detection.bbox.y * overlayCanvas.height;
-        const width = detection.bbox.width * overlayCanvas.width;
-        const height = detection.bbox.height * overlayCanvas.height;
-        
-        overlayCtx.strokeStyle = color;
-        overlayCtx.strokeRect(x, y, width, height);
-        
-        const label = detection.color || detection.class || 'unknown';
-        const confidence = detection.confidence ? Math.round(detection.confidence * 100) : '?';
-        const text = `${label} ${confidence}%`;
-        
-        overlayCtx.fillStyle = color;
-        const textWidth = overlayCtx.measureText(text).width;
-        overlayCtx.fillRect(x, y - 26, textWidth + 10, 26);
-        
-        overlayCtx.fillStyle = '#000000';
-        overlayCtx.fillText(text, x + 5, y - 8);
-        
-        if (detection.center) {
-            const centerX = detection.center.x * overlayCanvas.width;
-            const centerY = detection.center.y * overlayCanvas.height;
+        if (detection.bbox && detection.bbox.length >= 4) {
+            const [x, y, width, height] = detection.bbox;
+            const color = detectionColors[detection.color?.toLowerCase()] || detectionColors.default;
             
-            overlayCtx.lineWidth = 2;
-            overlayCtx.strokeStyle = '#ffffff';
-            overlayCtx.beginPath();
-            overlayCtx.moveTo(centerX - 10, centerY);
-            overlayCtx.lineTo(centerX + 10, centerY);
-            overlayCtx.moveTo(centerX, centerY - 10);
-            overlayCtx.lineTo(centerX, centerY + 10);
-            overlayCtx.stroke();
+            // Draw bounding box
+            overlayCtx.strokeStyle = color;
+            overlayCtx.lineWidth = 3;
+            overlayCtx.strokeRect(x, y, width, height);
+            
+            // Draw label background
+            const label = `${detection.class || 'Object'} (${detection.color || 'Unknown'})`;
+            overlayCtx.font = '14px Arial';
+            const textWidth = overlayCtx.measureText(label).width;
             
             overlayCtx.fillStyle = color;
-            overlayCtx.beginPath();
-            overlayCtx.arc(centerX, centerY, 5, 0, Math.PI * 2);
-            overlayCtx.fill();
+            overlayCtx.fillRect(x, y - 25, textWidth + 10, 20);
+            
+            // Draw label text
+            overlayCtx.fillStyle = 'white';
+            overlayCtx.fillText(label, x + 5, y - 8);
         }
     });
 }
@@ -400,7 +374,7 @@ function handleConnectionStatus(data) {
             statusElement.classList.remove('bg-red-500');
             statusElement.classList.add('bg-green-500');
         } else {
-            statusElement.classList.remove('bg-green-500'); 
+            statusElement.classList.remove('bg-green-500');
             statusElement.classList.add('bg-red-500');
         }
     }
@@ -415,6 +389,7 @@ function updateRobotStatus(data) {
         const angles = [pos.base, pos.shoulder, pos.elbow, pos.gripper];
         currentServoPositions = angles;
         
+        // Update servo sliders
         for (let i = 0; i < angles.length; i++) {
             const slider = document.getElementById(`servo${i}`);
             const value = document.getElementById(`servo${i}Value`);
@@ -424,6 +399,7 @@ function updateRobotStatus(data) {
             }
         }
         
+        // Update joint displays
         document.getElementById('jointBase').textContent = `${pos.base}°`;
         document.getElementById('jointShoulder').textContent = `${pos.shoulder}°`;
         document.getElementById('jointElbow').textContent = `${pos.elbow}°`;
@@ -432,12 +408,9 @@ function updateRobotStatus(data) {
     
     if (data.lastDetectedColor) {
         const colorElement = document.getElementById('lastDetectedColor');
-        const colorLabel = document.getElementById('lastDetectedColorLabel');
-        
-        if (colorElement && colorLabel) {
-            const color = data.lastDetectedColor.toLowerCase();
-            colorElement.style.backgroundColor = detectionColors[color] || '#808080';
-            colorLabel.textContent = color || 'Unknown';
+        if (colorElement) {
+            colorElement.textContent = data.lastDetectedColor;
+            colorElement.style.color = detectionColors[data.lastDetectedColor.toLowerCase()] || detectionColors.default;
         }
     }
 }
@@ -445,38 +418,18 @@ function updateRobotStatus(data) {
 // Add log entry
 function addLogEntry(message, type = '') {
     const logContainer = document.getElementById('logContainer');
-    const entry = document.createElement('div');
-    
-    let typeClass = '';
-    switch(type) {
-        case 'system':
-            typeClass = 'text-blue-600 dark:text-blue-400';
-            break;
-        case 'error':
-            typeClass = 'text-red-600 dark:text-red-400';
-            break;
-        case 'warning':
-            typeClass = 'text-yellow-600 dark:text-yellow-400';
-            break;
-        case 'ai':
-            typeClass = 'text-green-600 dark:text-green-400';
-            break;
-        case 'sequence':
-            typeClass = 'text-purple-600 dark:text-purple-400';
-            break;
-        default:
-            typeClass = 'text-gray-700 dark:text-gray-300';
-    }
-    
-    entry.className = `mb-1 pb-1 border-b border-gray-200 dark:border-gray-700 ${typeClass}`;
+    if (!logContainer) return;
     
     const timestamp = new Date().toLocaleTimeString();
-    entry.textContent = `[${timestamp}] ${message}`;
+    const logEntry = document.createElement('div');
+    logEntry.className = `text-sm ${type === 'error' ? 'text-red-400' : type === 'system' ? 'text-blue-400' : type === 'ai' ? 'text-green-400' : 'text-gray-300'}`;
+    logEntry.textContent = `[${timestamp}] ${message}`;
     
-    logContainer.appendChild(entry);
+    logContainer.appendChild(logEntry);
     logContainer.scrollTop = logContainer.scrollHeight;
     
-    if (logContainer.childNodes.length > 100) {
+    // Keep only last 50 entries
+    while (logContainer.children.length > 50) {
         logContainer.removeChild(logContainer.firstChild);
     }
 }
@@ -484,40 +437,38 @@ function addLogEntry(message, type = '') {
 // REST API helpers
 async function sendRobotApiCommand(command) {
     try {
-        addLogEntry(`Sending command: ${JSON.stringify(command)}`);
-        
-        const res = await fetch('/api/robot/command', {
+        const response = await fetch('/api/robot/command', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+            },
             body: JSON.stringify(command)
         });
         
-        const data = await res.json();
-        
-        if (res.ok) {
-            addLogEntry(`Command ${data.status}: ${JSON.stringify(command)}`);
-        } else {
-            addLogEntry(`Command failed: ${data.error}`, 'error');
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
         }
-    } catch (e) {
-        console.error('API Error:', e);
-        addLogEntry(`Failed to send command: ${e.message}`, 'error');
+        
+        const result = await response.json();
+        console.log('Robot command result:', result);
+        return result;
+    } catch (error) {
+        console.error('Error sending robot command:', error);
+        addLogEntry(`Failed to send command: ${error.message}`, 'error');
     }
 }
 
 async function fetchRobotStatus() {
     try {
-        const res = await fetch('/api/robot/status');
-        
-        if (res.ok) {
-            const data = await res.json();
-            updateRobotStatus(data);
-        } else {
-            addLogEntry('Failed to fetch robot status', 'error');
+        const response = await fetch('/api/robot/status');
+        if (response.ok) {
+            const status = await response.json();
+            if (status.armPosition) {
+                updateRobotStatus(status);
+            }
         }
-    } catch (e) {
-        console.error('Status fetch error:', e);
-        addLogEntry('Error fetching robot status', 'error');
+    } catch (error) {
+        console.error('Error fetching robot status:', error);
     }
 }
 
@@ -529,8 +480,10 @@ document.addEventListener('DOMContentLoaded', () => {
     connectWebSocket();
     addLogEntry('Robot Arm Sorting System initialized', 'system');
     
+    // Fetch initial robot status
     fetchRobotStatus();
     
+    // Handle window resize
     window.addEventListener('resize', () => {
         console.log('Window resized, adjusting canvas');
         const container = videoCanvas.parentElement;
@@ -541,6 +494,7 @@ document.addEventListener('DOMContentLoaded', () => {
         overlayCanvas.style.height = 'auto';
     });
     
+    // Handle network changes
     window.addEventListener('online', () => {
         if (!ws || ws.readyState !== WebSocket.OPEN) {
             addLogEntry('Network restored, reconnecting...', 'system');
@@ -548,5 +502,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
     
+    // Periodic status updates
     setInterval(fetchRobotStatus, 30000);
 });
