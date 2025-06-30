@@ -124,6 +124,32 @@ const setupEventListeners = () => {
             }
         });
     }
+
+    // Position template buttons
+    document.getElementById('namedPosRest').addEventListener('click', () => {
+        sendRobotApiCommand({armPosition: 'rest'});
+        addLogEntry('Moving to REST position');
+    });
+
+    document.getElementById('namedPosCenter').addEventListener('click', () => {
+        sendRobotApiCommand({armPosition: 'pickup'});  // "center" in UI = "pickup" in ESP8266
+        addLogEntry('Moving to CENTER position');
+    });
+
+    document.getElementById('namedPosRed').addEventListener('click', () => {
+        sendRobotApiCommand({armPosition: 'red_bin'});
+        addLogEntry('Moving to RED BIN position');
+    });
+
+    document.getElementById('namedPosGreen').addEventListener('click', () => {
+        sendRobotApiCommand({armPosition: 'green_bin'});
+        addLogEntry('Moving to GREEN BIN position');
+    });
+
+    document.getElementById('namedPosBlue').addEventListener('click', () => {
+        sendRobotApiCommand({armPosition: 'blue_bin'});
+        addLogEntry('Moving to BLUE BIN position');
+    });
 };
 
 // Execute sorting sequence based on detected color
@@ -442,18 +468,18 @@ async function sendRobotApiCommand(command) {
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(command)
+            body: JSON.stringify(command),
         });
+
+        const data = await response.json();
         
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+        if (response.ok) {
+            addLogEntry(`Command sent successfully: ${JSON.stringify(command)}`);
+        } else {
+            addLogEntry(`Error sending command: ${data.message || 'Unknown error'}`, 'error');
         }
-        
-        const result = await response.json();
-        console.log('Robot command result:', result);
-        return result;
     } catch (error) {
-        console.error('Error sending robot command:', error);
+        console.error('Error sending command:', error);
         addLogEntry(`Failed to send command: ${error.message}`, 'error');
     }
 }

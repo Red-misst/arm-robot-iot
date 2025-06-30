@@ -61,9 +61,12 @@ COLOR_RANGES = {
     "yellow": [
         (np.array([20, 100, 100]), np.array([30, 255, 255]))   # Yellow range
     ],
-    "pink": [
-        (np.array([140, 50, 100]), np.array([170, 255, 255]))  # Pink range
-    ]
+    "green": [
+        (np.array([40, 100, 100]), np.array([70, 255, 255]))   # Green range
+    ],
+    "blue": [
+        (np.array([100, 150, 0]), np.array([140, 255, 255]))   # Blue range
+    ],
 }
 
 class AIVisionProcessor:
