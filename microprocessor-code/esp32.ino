@@ -11,21 +11,6 @@ Adafruit_PWMServoDriver pca9685 = Adafruit_PWMServoDriver(0x40);
 #define SERVO_MAX  600  // Maximum pulse length
 #define STEP_DELAY 10   // Delay for smooth movement
 
-// Arm Position Definitions
-struct ArmPosition {
-  int base;      // Joint 0: Base rotation (0-180°)
-  int shoulder;  // Joint 1: Shoulder (-90° to 90°, mapped to 0-180°)
-  int elbow;     // Joint 2: Elbow (0-180°)
-  int gripper;   // Joint 3: Gripper (0=open, 180=closed)
-};
-
-// Predefined arm positions
-ArmPosition restPosition = {90, 90, 45, 0};
-ArmPosition pickupPosition = {90, 60, 120, 0};
-ArmPosition redBinPosition = {45, 90, 90, 180};
-ArmPosition greenBinPosition = {90, 90, 90, 180};
-ArmPosition blueBinPosition = {135, 90, 90, 180};
-
 // Wi-Fi credentials
 const char* ssid = "Tenda_5C30C8";
 const char* password = "op898989..";
@@ -48,9 +33,22 @@ unsigned long lastHeartbeat = 0;
 int reconnectAttempts = 0;
 bool isConnected = false;
 
+// Sequence execution
+#define MAX_SEQUENCE_STEPS 30 // Maximum steps in a movement sequence
+bool isExecutingSequence = false;
+unsigned long nextStepTime = 0;
+
+// Current joint positions
+struct JointPositions {
+  int base;      // Joint 0: Base rotation (0-180°)
+  int shoulder;  // Joint 1: Shoulder (0-180°)
+  int elbow;     // Joint 2: Elbow (0-180°)
+  int gripper;   // Joint 3: Gripper (0=open, 180=closed)
+};
+
 // Globals
 WebSocketsClient webSocket;
-ArmPosition currentPosition = restPosition;
+JointPositions currentPosition = {90, 90, 45, 0}; // Default startup position
 String lastDetectedColor = "";
 
 // Move servo smoothly
@@ -65,13 +63,30 @@ void moveServoSmoothly(uint8_t servoChannel, int startAngle, int endAngle) {
     }
 }
 
-// Move arm to predefined position
-void moveToPosition(ArmPosition targetPosition) {
-    moveServoSmoothly(0, currentPosition.base, targetPosition.base);
-    moveServoSmoothly(1, currentPosition.shoulder, targetPosition.shoulder);
-    moveServoSmoothly(2, currentPosition.elbow, targetPosition.elbow);
-    moveServoSmoothly(3, currentPosition.gripper, targetPosition.gripper);
-    currentPosition = targetPosition;
+// Move a specific servo to a position
+void moveServoToAngle(uint8_t channel, int angle) {
+    // Constrain angle to valid range
+    angle = constrain(angle, 0, 180);
+    
+    // Get current angle for that channel
+    int currentAngle = getCurrentAngle(channel);
+    
+    Serial.print("Moving servo ");
+    Serial.print(channel);
+    Serial.print(" from ");
+    Serial.print(currentAngle);
+    Serial.print("° to ");
+    Serial.print(angle);
+    Serial.println("°");
+    
+    // Move servo smoothly
+    moveServoSmoothly(channel, currentAngle, angle);
+    
+    // Update current position
+    updateCurrentPosition(channel, angle);
+    
+    // Send status update to report new position
+    sendStatus();
 }
 
 // Send heartbeat to keep connection alive
@@ -132,7 +147,7 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
     }
 }
 
-// Process incoming commands - IMPROVED VERSION
+// Process incoming commands - SIMPLIFIED VERSION
 void handleCommand(uint8_t* payload, size_t length) {
     // Create a null-terminated string from the payload
     char* jsonStr = (char*)malloc(length + 1);
@@ -148,7 +163,7 @@ void handleCommand(uint8_t* payload, size_t length) {
     Serial.println(jsonStr);
     
     // Use a dynamic document for better memory management
-    DynamicJsonDocument doc(1024);  // Increased size for more complex messages
+    DynamicJsonDocument doc(2048);  // Increased size for complex sequences
     DeserializationError error = deserializeJson(doc, jsonStr);
     free(jsonStr);
     
@@ -157,32 +172,9 @@ void handleCommand(uint8_t* payload, size_t length) {
         Serial.println(error.c_str());
         return;
     }
-
-    // Process detection commands
-    if (doc.containsKey("detection")) {
-        Serial.println("Processing detection command");
-        const char* color = doc["detection"]["color"];
-        if (color != NULL) {
-            lastDetectedColor = String(color);
-            Serial.print("Detected color: ");
-            Serial.println(lastDetectedColor);
-            executeSortingSequence(lastDetectedColor);
-        }
-    }
-    
-    // Process arm position commands
-    else if (doc.containsKey("armPosition")) {
-        Serial.println("Processing arm position command");
-        const char* position = doc["armPosition"];
-        if (position != NULL) {
-            Serial.print("Moving to position: ");
-            Serial.println(position);
-            moveToNamedPosition(position);
-        }
-    }
     
     // Process individual servo commands
-    else if (doc.containsKey("servo")) {
+    if (doc.containsKey("servo")) {
         Serial.println("Processing servo command");
         JsonObject servo = doc["servo"];
         
@@ -190,17 +182,106 @@ void handleCommand(uint8_t* payload, size_t length) {
             uint8_t channel = servo["channel"].as<uint8_t>();
             int angle = servo["angle"].as<int>();
             
-            Serial.print("Moving servo channel ");
-            Serial.print(channel);
-            Serial.print(" to angle ");
-            Serial.println(angle);
-            
-            moveServoSmoothly(channel, getCurrentAngle(channel), angle);
-            updateCurrentPosition(channel, angle);
+            if (channel < 4) {  // We only have 4 servos (0-3)
+                moveServoToAngle(channel, angle);
+            } else {
+                Serial.println("Invalid servo channel");
+            }
         }
     }
     
-    // Acknowledge receipt of command with updated status
+    // Handle movement sequence
+    else if (doc.containsKey("sequence")) {
+        Serial.println("Processing movement sequence");
+        executeMovementSequence(doc["sequence"]);
+    }
+    
+    // Handle detection info (just store it, don't execute anything)
+    else if (doc.containsKey("detection")) {
+        Serial.println("Processing detection info");
+        if (doc["detection"].containsKey("color")) {
+            lastDetectedColor = doc["detection"]["color"].as<String>();
+            Serial.print("Detected color: ");
+            Serial.println(lastDetectedColor);
+            // No automatic action - frontend will send sequence if needed
+        }
+    }
+    
+    // Send updated status after handling command
+    sendStatus();
+}
+
+// Execute flexible movement sequence from frontend
+void executeMovementSequence(JsonArray sequence) {
+    if (isExecutingSequence) {
+        Serial.println("Already executing a sequence - ignoring new request");
+        return;
+    }
+    
+    if (sequence.size() == 0 || sequence.size() > MAX_SEQUENCE_STEPS) {
+        Serial.println("Invalid sequence size");
+        return;
+    }
+    
+    Serial.print("Starting sequence with ");
+    Serial.print(sequence.size());
+    Serial.println(" steps");
+    
+    isExecutingSequence = true;
+    
+    // Process each step in the sequence
+    for (JsonObject step : sequence) {
+        // Check if the step contains required fields
+        if (!step.containsKey("joint") || (!step.containsKey("angle") && !step.containsKey("value"))) {
+            Serial.println("Invalid step format - skipping");
+            continue;
+        }
+        
+        const char* jointName = step["joint"];
+        // Support both "angle" and "value" field names for compatibility
+        int angle = step.containsKey("angle") ? step["angle"].as<int>() : step["value"].as<int>();
+        int delay_ms = 0;
+        
+        if (step.containsKey("delay")) {
+            delay_ms = step["delay"].as<int>();
+        }
+        
+        uint8_t channel;
+        
+        // Map joint name to channel
+        if (strcmp(jointName, "base") == 0) {
+            channel = 0;
+        } else if (strcmp(jointName, "shoulder") == 0) {
+            channel = 1;
+        } else if (strcmp(jointName, "elbow") == 0) {
+            channel = 2;
+        } else if (strcmp(jointName, "gripper") == 0) {
+            channel = 3;
+        } else {
+            Serial.print("Unknown joint name: ");
+            Serial.println(jointName);
+            continue;
+        }
+        
+        Serial.print("Moving ");
+        Serial.print(jointName);
+        Serial.print(" to ");
+        Serial.print(angle);
+        Serial.print("° with ");
+        Serial.print(delay_ms);
+        Serial.println("ms delay");
+        
+        // Move the servo
+        moveServoToAngle(channel, angle);
+        
+        // Apply delay if specified
+        if (delay_ms > 0) {
+            delay(delay_ms);
+        }
+    }
+    
+    isExecutingSequence = false;
+    Serial.println("Sequence completed");
     sendStatus();
 }
 
@@ -223,6 +304,7 @@ void sendStatus() {
     doc["lastDetectedColor"] = lastDetectedColor;
     doc["timestamp"] = millis();
     doc["freeHeap"] = ESP.getFreeHeap();  // ESP32 compatible heap function
+    doc["isExecutingSequence"] = isExecutingSequence;
 
     String message;
     serializeJson(doc, message);
@@ -233,22 +315,7 @@ void sendStatus() {
     webSocket.sendTXT(message);
 }
 
-// Add this new function to confirm receipt of commands
-void acknowledgeCommand(const char* commandType) {
-    DynamicJsonDocument doc(256);
-    doc["device"] = "robot_arm";
-    doc["type"] = "ack";
-    doc["command"] = commandType;
-    doc["status"] = "received";
-    doc["timestamp"] = millis();
-    
-    String message;
-    serializeJson(doc, message);
-    webSocket.sendTXT(message);
-    Serial.print("Sent command acknowledgement: ");
-    Serial.println(message);
-}
-
+// Get current angle for a specific channel
 int getCurrentAngle(uint8_t channel) {
     switch(channel) {
         case 0: return currentPosition.base;
@@ -259,6 +326,7 @@ int getCurrentAngle(uint8_t channel) {
     }
 }
 
+// Update current position for a specific channel
 void updateCurrentPosition(uint8_t channel, int angle) {
     switch(channel) {
         case 0: currentPosition.base = angle; break;
@@ -268,36 +336,7 @@ void updateCurrentPosition(uint8_t channel, int angle) {
     }
 }
 
-void moveToNamedPosition(const char* name) {
-    if (strcmp(name, "rest") == 0) moveToPosition(restPosition);
-    else if (strcmp(name, "pickup") == 0) moveToPosition(pickupPosition);
-    else if (strcmp(name, "red_bin") == 0) moveToPosition(redBinPosition);
-    else if (strcmp(name, "green_bin") == 0) moveToPosition(greenBinPosition);
-    else if (strcmp(name, "blue_bin") == 0) moveToPosition(blueBinPosition);
-}
-
-void executeSortingSequence(String color) {
-    moveToPosition(pickupPosition);
-    delay(1000);
-    ArmPosition grab = pickupPosition; grab.gripper = 180;
-    moveToPosition(grab);
-    delay(1000);
-    ArmPosition lift = grab; lift.shoulder = 90;
-    moveToPosition(lift);
-    delay(500);
-
-    if (color.equalsIgnoreCase("red")) moveToPosition(redBinPosition);
-    else if (color.equalsIgnoreCase("green")) moveToPosition(greenBinPosition);
-    else if (color.equalsIgnoreCase("blue")) moveToPosition(blueBinPosition);
-    else moveToPosition(greenBinPosition);
-
-    delay(1000);
-    ArmPosition release = currentPosition; release.gripper = 0;
-    moveToPosition(release);
-    delay(1000);
-    moveToPosition(restPosition);
-}
-
+// Connect to WiFi network
 void connectToWiFi() {
     Serial.println("Connecting to WiFi...");
     WiFi.disconnect();
@@ -330,13 +369,18 @@ void connectToWiFi() {
 void setup() {
     Serial.begin(115200);
     delay(1000);
-    Serial.println("\nRobot Arm Control System Starting...");
+    Serial.println("\nRobot Arm Sequence Executor Starting...");
     
     // Initialize hardware - ESP32 Wire library initialization
     Wire.begin(SDA_PIN, SCL_PIN);
     pca9685.begin();
     pca9685.setPWMFreq(50);
-    moveToPosition(restPosition);
+    
+    // Initialize each servo to its default position
+    pca9685.setPWM(0, 0, map(currentPosition.base, 0, 180, SERVO_MIN, SERVO_MAX));
+    pca9685.setPWM(1, 0, map(currentPosition.shoulder, 0, 180, SERVO_MIN, SERVO_MAX));
+    pca9685.setPWM(2, 0, map(currentPosition.elbow, 0, 180, SERVO_MIN, SERVO_MAX));
+    pca9685.setPWM(3, 0, map(currentPosition.gripper, 0, 180, SERVO_MIN, SERVO_MAX));
     
     // Connect to WiFi
     connectToWiFi();

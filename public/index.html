@@ -184,6 +184,145 @@
                 </div>
             </div>
 
+            <!-- Position Template Configuration -->
+            <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg overflow-hidden lg:col-span-2 mt-6">
+                <div class="flex justify-between items-center px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+                    <h2 class="text-xl font-medium text-gray-800 dark:text-gray-200">Template Configuration</h2>
+                    <div>
+                        <button id="saveTemplates" 
+                                class="bg-robot-purple-600 hover:bg-robot-purple-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300 mr-2">
+                            Save Templates
+                        </button>
+                        <button id="resetTemplates" 
+                                class="bg-gray-500 hover:bg-gray-600 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-300">
+                            Reset to Defaults
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="p-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-6">
+                        <!-- Rest Position Config -->
+                        <div class="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg">
+                            <h3 class="text-lg font-medium text-indigo-600 dark:text-indigo-400 mb-3">Rest Position</h3>
+                            <div class="space-y-3">
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Base:</label>
+                                    <input type="number" id="configRestBase" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Shoulder:</label>
+                                    <input type="number" id="configRestShoulder" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Elbow:</label>
+                                    <input type="number" id="configRestElbow" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Gripper:</label>
+                                    <input type="number" id="configRestGripper" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Center Position Config -->
+                        <div class="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg">
+                            <h3 class="text-lg font-medium text-amber-600 dark:text-amber-400 mb-3">Center Position</h3>
+                            <div class="space-y-3">
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Base:</label>
+                                    <input type="number" id="configCenterBase" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Shoulder:</label>
+                                    <input type="number" id="configCenterShoulder" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Elbow:</label>
+                                    <input type="number" id="configCenterElbow" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Gripper:</label>
+                                    <input type="number" id="configCenterGripper" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Red Position Config -->
+                        <div class="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg">
+                            <h3 class="text-lg font-medium text-red-600 dark:text-red-400 mb-3">Red Bin Position</h3>
+                            <div class="space-y-3">
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Base:</label>
+                                    <input type="number" id="configRedBase" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Shoulder:</label>
+                                    <input type="number" id="configRedShoulder" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Elbow:</label>
+                                    <input type="number" id="configRedElbow" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Gripper:</label>
+                                    <input type="number" id="configRedGripper" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Green Position Config -->
+                        <div class="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg">
+                            <h3 class="text-lg font-medium text-green-600 dark:text-green-400 mb-3">Green Bin Position</h3>
+                            <div class="space-y-3">
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Base:</label>
+                                    <input type="number" id="configGreenBase" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Shoulder:</label>
+                                    <input type="number" id="configGreenShoulder" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Elbow:</label>
+                                    <input type="number" id="configGreenElbow" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Gripper:</label>
+                                    <input type="number" id="configGreenGripper" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Blue Position Config -->
+                        <div class="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg">
+                            <h3 class="text-lg font-medium text-blue-600 dark:text-blue-400 mb-3">Blue Bin Position</h3>
+                            <div class="space-y-3">
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Base:</label>
+                                    <input type="number" id="configBlueBase" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Shoulder:</label>
+                                    <input type="number" id="configBlueShoulder" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Elbow:</label>
+                                    <input type="number" id="configBlueElbow" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                                <div class="flex items-center">
+                                    <label class="w-20 text-sm text-gray-700 dark:text-gray-300">Gripper:</label>
+                                    <input type="number" id="configBlueGripper" min="0" max="180" class="w-16 text-center border rounded p-1 dark:bg-gray-800 dark:text-gray-200">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="mt-4 text-sm text-gray-500 dark:text-gray-400">
+                        Configure custom positions for each template. Changes will apply after clicking "Save Templates".
+                    </p>
+                </div>
+            </div>
+
             <!-- System Log Panel -->
             <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg overflow-hidden lg:col-span-2">
                 <div class="flex justify-between items-center px-6 py-4 border-b border-gray-200 dark:border-gray-700">
