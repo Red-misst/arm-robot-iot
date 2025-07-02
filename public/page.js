@@ -179,12 +179,20 @@ function executeSortingSequence(color) {
     addLogEntry(`Executing sorting sequence for ${color}`, "ai");
 
     // Sequence: pickup -> target bin -> rest
-    setTimeout(() => sendRobotApiCommand({ armPosition: "pickup" }), 100);
-    setTimeout(
-      () => sendRobotApiCommand({ armPosition: targetPosition }),
-      2000
-    );
-    setTimeout(() => sendRobotApiCommand({ armPosition: "rest" }), 4000);
+    console.log("sending arm to postion:", targetPosition);
+    switch (targetPosition) {
+      case "red_bin":
+        moveToRedSequence()
+        break;
+      case "green_bin":
+        moveToGreenSequence()
+        break;
+      case "blue_bin":
+        moveToBlueSequence()
+        break;
+      default:
+        console.log(targetPosition)
+    }
 
     objectsSorted++;
     document.getElementById("objectsSorted").textContent = objectsSorted;
@@ -238,26 +246,47 @@ function connectWebSocket() {
     try {
       // Handle binary data (video frames)
       if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
-        const blob =
-          event.data instanceof ArrayBuffer
+        try {
+          // Create blob with proper MIME type and check data integrity
+          const blob = event.data instanceof ArrayBuffer
             ? new Blob([event.data], { type: "image/jpeg" })
-            : event.data;
-
-        handleVideoFrame(blob);
-        drawDetections(latestDetections);
-        return;
+            : (event.data.type === "image/jpeg" ? event.data : new Blob([event.data], { type: "image/jpeg" }));
+          
+          // More robust size check (real camera frames should be larger)
+          if (blob.size > 10000) {
+            // Debug info for a small percentage of frames
+            if (Math.random() < 0.01) {
+              console.log(`Processing video frame: ${blob.size} bytes, type: ${blob.type}`);
+            }
+            
+            handleVideoFrame(blob);
+            drawDetections(latestDetections);
+          } else if (blob.size > 0) {
+            // Small data payload that's not a proper image frame
+            console.warn(`Received small binary data (${blob.size} bytes), not processing as frame`);
+          }
+          return;
+        } catch (err) {
+          console.error("Error processing binary WebSocket data:", err);
+          return;
+        }
       }
 
       // Handle JSON messages
       const data = JSON.parse(event.data);
+      console.log(data);
+      if (!data || !data.type) {
+        console.warn("Received invalid message:", data);
+        return;
+      }
       handleMessage(data);
     } catch (e) {
-      console.error("Error parsing message:", e);
+      console.log("Error parsing message:", e);
     }
   };
 
   ws.onerror = (error) => {
-    console.error("WebSocket error:", error);
+    console.log("WebSocket error:", error);
     addLogEntry("WebSocket error occurred", "error");
   };
 }
@@ -312,6 +341,14 @@ function handleMessage(data) {
 
     case "frame_metadata":
       // Handle frame metadata if needed
+      handleCameraInfo(data);
+
+      break;
+
+    case "execute_sequence":
+      if (data.color) {
+        executeSortingSequence(data.color);
+      }
       break;
 
     case "detection":
@@ -321,6 +358,8 @@ function handleMessage(data) {
     case "robot_status":
       updateRobotStatus(data.data || data);
       break;
+
+   
 
     default:
       // Handle robot arm messages
@@ -592,269 +631,141 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(fetchRobotStatus, 30000);
 });
 
-// Add this to your page.js file
-document.addEventListener("DOMContentLoaded", function () {
-  // Default template positions
-  const defaultTemplates = {
-    rest: { base: 90, shoulder: 150, elbow: 30, gripper: 90 },
-    center: { base: 90, shoulder: 60, elbow: 45, gripper: 40 },
-    red: { base: 30, shoulder: 90, elbow: 45, gripper: 90 },
-    green: { base: 90, shoulder: 90, elbow: 45, gripper: 90 },
-    blue: { base: 150, shoulder: 90, elbow: 45, gripper: 90 }
-  };
+// These functions need to be at the global scope (outside any event listeners)
 
-  // Current templates - either from localStorage or defaults
-  let templates = loadTemplates();
-
-  // Initialize template config inputs
-  initializeTemplateConfig();
-
-  // Template buttons event listeners
-  document.getElementById("namedPosRest").addEventListener("click", () => {
-    moveToTemplateSequence("rest");
-  });
-
-  document.getElementById("namedPosCenter").addEventListener("click", () => {
-    moveToTemplateSequence("center");
-  });
-
-  document.getElementById("namedPosRed").addEventListener("click", () => {
-    moveToTemplateSequence("red");
-  });
-
-  document.getElementById("namedPosGreen").addEventListener("click", () => {
-    moveToTemplateSequence("green");
-  });
-
-  document.getElementById("namedPosBlue").addEventListener("click", () => {
-    moveToTemplateSequence("blue");
-  });
-
-  // Template config buttons
-  document
-    .getElementById("saveTemplates")
-    .addEventListener("click", saveTemplateConfig);
-  document
-    .getElementById("resetTemplates")
-    .addEventListener("click", resetTemplateConfig);
-
-  // Function to move to a template position
-  function moveToTemplate(templateName) {
-    const position = templates[templateName];
-    if (!position) {
-      logMessage(`Error: Template "${templateName}" not found`);
-      return;
-    }
-
-    // Update servo sliders to match template position
-    document.getElementById("servo0").value = position.base;
-    document.getElementById("servo1").value = position.shoulder;
-    document.getElementById("servo2").value = position.elbow;
-    document.getElementById("servo3").value = position.gripper;
-
-    // Update display values
-    document.getElementById("servo0Value").textContent = `${position.base}°`;
-    document.getElementById(
-      "servo1Value"
-    ).textContent = `${position.shoulder}°`;
-    document.getElementById("servo2Value").textContent = `${position.elbow}°`;
-    document.getElementById("servo3Value").textContent = `${position.gripper}°`;
-
-    // Update joint display
-    document.getElementById("jointBase").textContent = `${position.base}°`;
-    document.getElementById(
-      "jointShoulder"
-    ).textContent = `${position.shoulder}°`;
-    document.getElementById("jointElbow").textContent = `${position.elbow}°`;
-    document.getElementById(
-      "jointGripper"
-    ).textContent = `${position.gripper}°`;
-
-    // Send command to robot (you'll need to implement this based on your backend)
-    sendRobotCommand(position);
-
-    logMessage(`Moving to ${templateName} position`);
-  }
-
-  // Function to send command to robot
-  function sendRobotCommand(position) {
-    // Implementation depends on your backend communication
-    console.log("Sending command to robot:", position);
-    // Example: fetch('/api/robot/move', { method: 'POST', body: JSON.stringify(position) });
-  }
-
-  // Function to load templates from localStorage
-  function loadTemplates() {
-    const savedTemplates = localStorage.getItem("robotTemplates");
-    if (savedTemplates) {
-      try {
-        return JSON.parse(savedTemplates);
-      } catch (e) {
-        console.error("Failed to parse saved templates", e);
-        return { ...defaultTemplates };
-      }
-    }
-    return { ...defaultTemplates };
-  }
-
-  // Function to save templates to localStorage
-  function saveTemplates() {
-    localStorage.setItem("robotTemplates", JSON.stringify(templates));
-  }
-
-  // Initialize template config inputs with current values
-  function initializeTemplateConfig() {
-    // Rest position
-    document.getElementById("configRestBase").value = templates.rest.base;
-    document.getElementById("configRestShoulder").value =
-      templates.rest.shoulder;
-    document.getElementById("configRestElbow").value = templates.rest.elbow;
-    document.getElementById("configRestGripper").value = templates.rest.gripper;
-
-    // Center position
-    document.getElementById("configCenterBase").value = templates.center.base;
-    document.getElementById("configCenterShoulder").value =
-      templates.center.shoulder;
-    document.getElementById("configCenterElbow").value = templates.center.elbow;
-    document.getElementById("configCenterGripper").value =
-      templates.center.gripper;
-
-    // Red position
-    document.getElementById("configRedBase").value = templates.red.base;
-    document.getElementById("configRedShoulder").value = templates.red.shoulder;
-    document.getElementById("configRedElbow").value = templates.red.elbow;
-    document.getElementById("configRedGripper").value = templates.red.gripper;
-
-    // Green position
-    document.getElementById("configGreenBase").value = templates.green.base;
-    document.getElementById("configGreenShoulder").value =
-      templates.green.shoulder;
-    document.getElementById("configGreenElbow").value = templates.green.elbow;
-    document.getElementById("configGreenGripper").value =
-      templates.green.gripper;
-
-    // Blue position
-    document.getElementById("configBlueBase").value = templates.blue.base;
-    document.getElementById("configBlueShoulder").value =
-      templates.blue.shoulder;
-    document.getElementById("configBlueElbow").value = templates.blue.elbow;
-    document.getElementById("configBlueGripper").value = templates.blue.gripper;
-  }
-
-  // Save template config from input values
-  function saveTemplateConfig() {
-    templates.rest = {
-      elbow: parseInt(document.getElementById("configRestElbow").value),
-      gripper: parseInt(document.getElementById("configRestGripper").value),
-      shoulder: parseInt(document.getElementById("configRestShoulder").value),
-      base: parseInt(document.getElementById("configRestBase").value)
-    };
-
-    templates.center = {
-      gripper: parseInt(document.getElementById("configCenterGripper").value),
-      elbow: parseInt(document.getElementById("configCenterElbow").value),
-      shoulder: parseInt(document.getElementById("configCenterShoulder").value),
-      base: parseInt(document.getElementById("configCenterBase").value)
-    };
-
-    templates.red = {
-      base: parseInt(document.getElementById("configRedBase").value),
-      shoulder: parseInt(document.getElementById("configRedShoulder").value),
-      elbow: parseInt(document.getElementById("configRedElbow").value),
-      gripper: parseInt(document.getElementById("configRedGripper").value)
-    };
-
-    templates.green = {
-      base: parseInt(document.getElementById("configGreenBase").value),
-      shoulder: parseInt(document.getElementById("configGreenShoulder").value),
-      elbow: parseInt(document.getElementById("configGreenElbow").value),
-      gripper: parseInt(document.getElementById("configGreenGripper").value)
-    };
-
-    templates.blue = {
-      base: parseInt(document.getElementById("configBlueBase").value),
-      shoulder: parseInt(document.getElementById("configBlueShoulder").value),
-      elbow: parseInt(document.getElementById("configBlueElbow").value),
-      gripper: parseInt(document.getElementById("configBlueGripper").value)
-    };
-
-    // Save to localStorage
-    saveTemplates();
-
-    // Send updated templates to ESP32
-    sendTemplatestoESP32();
-
-    logMessage("Template positions saved successfully");
-  }
-
-  // Add this function to send templates to ESP32
-  function sendTemplatestoESP32() {
-    // Send 'rest' position
-    sendRobotApiCommand({
-      updateTemplate: {
-        name: "rest",
-        position: templates.rest
-      }
+// Rest position sequence
+function moveToRestSequence() {
+  addLogEntry('Starting REST sequence', 'system');
+  
+  const restSequence = [
+    // First secure the gripper
+    { joint: 'elbow', value: 45, delay: 2000 },
+    { joint: 'shoulder', value: 60, delay: 2000 },
+    { joint: 'base', value: 15, delay: 4000 }
+  ];
+  
+  return sendMovementSequence(restSequence)
+    .then(() => {
+      addLogEntry('REST sequence completed successfully', 'system');
+    })
+    .catch(error => {
+      addLogEntry(`Error executing REST sequence: ${error.message}`, 'error');
     });
+}
 
-    // Send 'center/pickup' position
-    sendRobotApiCommand({
-      updateTemplate: {
-        name: "pickup", // Use 'pickup' for ESP32
-        position: templates.center // But map from 'center' in the UI
-      }
+// Center/pickup position sequence
+function moveToCenterSequence() {
+  addLogEntry('Starting CENTER sequence', 'system');
+  
+  const centerSequence = [
+    { joint: 'elbow', value: 45, delay: 2000 },
+    { joint: 'shoulder', value: 60, delay: 2000 },
+    { joint: 'base', value: 15, delay: 4000 }
+  ];
+  
+  return sendMovementSequence(centerSequence)
+    .then(() => {
+      addLogEntry('CENTER sequence completed successfully', 'system');
+    })
+    .catch(error => {
+      addLogEntry(`Error executing CENTER sequence: ${error.message}`, 'error');
     });
+}
 
-    // Send color bin positions
-    ["red", "green", "blue"].forEach((color) => {
-      sendRobotApiCommand({
-        updateTemplate: {
-          name: `${color}_bin`,
-          position: templates[color]
-        }
-      });
+// Green bin position sequence
+function moveToGreenSequence() {
+  addLogEntry('Starting GREEN sequence', 'system');
+  
+  const greenSequence = [
+    { joint: 'base', value: 15, delay: 4000 },      // b-30
+    { joint: 'shoulder', value: 140, delay: 1000 }, // s-140
+    { joint: 'elbow', value: 25, delay: 2000 },     // e-25
+    { joint: 'gripper', value: 90, delay: 2800 },   // g-90
+    { joint: 'elbow', value: 45, delay: 2000 },     // e-45
+    { joint: 'shoulder', value: 60, delay: 1000 },  // s-60
+    { joint: 'base', value: 150, delay: 1500 },     // b-150
+    { joint: 'shoulder', value: 140, delay: 1000 }, // s-140
+    { joint: 'elbow', value: 25, delay: 2000 },     // e-25
+    { joint: 'gripper', value: 90, delay: 2800 },   // g-90
+    { joint: 'elbow', value: 45, delay: 2000 },     // e-45
+    { joint: 'shoulder', value: 60, delay: 2000 },  // s-60
+    { joint: 'base', value: 15, delay: 4000 }       // b-30
+  ];
+  
+  return sendMovementSequence(greenSequence)
+    .then(() => {
+      addLogEntry('GREEN sequence completed successfully', 'system');
+    })
+    .catch(error => {
+      addLogEntry(`Error executing GREEN sequence: ${error.message}`, 'error');
     });
-  }
+}
 
-  // Reset template config to defaults
-  function resetTemplateConfig() {
-    templates = { ...defaultTemplates };
-    initializeTemplateConfig();
-    saveTemplates();
-    logMessage("Template positions reset to defaults");
-  }
+// Blue bin position sequence
+function moveToBlueSequence() {
+  addLogEntry('Starting BLUE sequence', 'system');
+  
+  const blueSequence = [
+    { joint: 'base', value: 15, delay: 4000 },      // b-30
+    { joint: 'shoulder', value: 140, delay: 1000 }, // s-140
+    { joint: 'elbow', value: 25, delay: 2000 },     // e-25
+    { joint: 'gripper', value: 90, delay: 2800 },   // g-90
+    { joint: 'elbow', value: 45, delay: 2000 },     // e-45
+    { joint: 'shoulder', value: 60, delay: 1000 },  // s-60
+    { joint: 'base', value: 120, delay: 1500 },     // b-120
+    { joint: 'shoulder', value: 140, delay: 1000 }, // s-130
+    { joint: 'elbow', value: 25, delay: 2000 },     // e-25
+    { joint: 'gripper', value: 90, delay: 2800 },   // g-90
+    { joint: 'elbow', value: 45, delay: 2000 },     // e-45
+    { joint: 'shoulder', value: 60, delay: 2000 },  // s-60
+    { joint: 'base', value: 15, delay: 4000 }       // b-30
+  ];
+  
+  return sendMovementSequence(blueSequence)
+    .then(() => {
+      addLogEntry('BLUE sequence completed successfully', 'system');
+    })
+    .catch(error => {
+      addLogEntry(`Error executing BLUE sequence: ${error.message}`, 'error');
+    });
+}
 
-  // Log message to UI
-  function logMessage(message) {
-    const logContainer = document.getElementById("logContainer");
-    const logEntry = document.createElement("div");
-    logEntry.classList.add("mb-1", "text-gray-800", "dark:text-gray-200");
+// Red sequence function
+function moveToRedSequence() {
+  addLogEntry('Starting RED sequence', 'system');
+  
+  const redSequence = [
+    { joint: 'base', value: 15, delay: 4000 },      // b-30
+    { joint: 'shoulder', value: 140, delay: 1000 }, // s-140
+    { joint: 'elbow', value: 25, delay: 2000 },     // e-25
+    { joint: 'gripper', value: 90, delay: 2800 },   // g-90
+    { joint: 'elbow', value: 45, delay: 2000 },     // e-45
+    { joint: 'shoulder', value: 60, delay: 1000 },  // s-60
+    { joint: 'base', value: 90, delay: 1500 },      // b-90
+    { joint: 'shoulder', value: 140, delay: 1000 }, // s-130
+    { joint: 'elbow', value: 25, delay: 2000 },     // e-25
+    { joint: 'gripper', value: 90, delay: 2800 },   // g-90
+    { joint: 'elbow', value: 45, delay: 2000 },     // e-45
+    { joint: 'shoulder', value: 60, delay: 2000 },  // s-60
+    { joint: 'base', value: 15, delay: 4000 }       // b-30
+  ];
+  
+  return sendMovementSequence(redSequence)
+    .then(() => {
+      addLogEntry('RED sequence completed successfully', 'system');
+    })
+    .catch(error => {
+      addLogEntry(`Error executing RED sequence: ${error.message}`, 'error');
+    });
+}
 
-    const timestamp = new Date().toLocaleTimeString();
-    logEntry.textContent = `[${timestamp}] ${message}`;
-
-    logContainer.appendChild(logEntry);
-    logContainer.scrollTop = logContainer.scrollHeight;
-  }
-
-  // Add any existing code you have for other functionality here
-  // ...
-
-  // Add these sequence functions to your page.js file
-
-  // Execute a smoother movement to template position with sequential joint movement
-  function moveToTemplateSequence(templateName) {
-    // Log the movement
-    addLogEntry(`Starting movement sequence to ${templateName.toUpperCase()}`, 'system');
-
-    // Use specialized sequence functions for each position
-    switch(templateName) {
-      case 'rest':
-        moveToRestSequence();
-        break;
-      case 'center':
-        moveToCenterSequence();
-        break;
+// Handle color sequence execution from WebSocket
+function handleColorSequence(message) {
+  if (message.type === 'execute_sequence' && message.color) {
+    const color = message.color.toLowerCase();
+    addLogEntry(`AI detected ${color.toUpperCase()} object, executing sequence`, 'system');
+    
+    switch(color) {
       case 'red':
         moveToRedSequence();
         break;
@@ -865,147 +776,32 @@ document.addEventListener("DOMContentLoaded", function () {
         moveToBlueSequence();
         break;
       default:
-        addLogEntry(`Error: Template "${templateName}" not found`, 'error');
+        addLogEntry(`Unknown color: ${color}`, 'error');
     }
   }
+}
 
-  // Rest position sequence - gentle movement to safe position
-  function moveToRestSequence() {
-    addLogEntry('Starting REST sequence', 'system');
-    
-    const restSequence = [
-      // First secure the gripper
-       { joint: 'elbow', value: 45, delay: 2000 },     // e-45
-      { joint: 'shoulder', value: 60, delay: 2000 },  // s-60
-      { joint: 'base', value: 15, delay: 4000 }       // b-30
-    ];
-    
-    sendMovementSequence(restSequence)
-      .then(() => {
-        addLogEntry('REST sequence completed successfully', 'system');
-      })
-      .catch(error => {
-        addLogEntry(`Error executing REST sequence: ${error.message}`, 'error');
-      });
+// Generic template sequence function
+function moveToTemplateSequence(templateName) {
+  addLogEntry(`Starting movement sequence to ${templateName.toUpperCase()}`, 'system');
+  
+  switch(templateName) {
+    case 'rest':
+      moveToRestSequence();
+      break;
+    case 'center':
+      moveToCenterSequence();
+      break;
+    case 'red':
+      moveToRedSequence();
+      break;
+    case 'green':
+      moveToGreenSequence();
+      break;
+    case 'blue':
+      moveToBlueSequence();
+      break;
+    default:
+      addLogEntry(`Error: Template "${templateName}" not found`, 'error');
   }
-
-  // Center/pickup position sequence - precise movement to pickup zone
-  function moveToCenterSequence() {
-    addLogEntry('Starting CENTER sequence', 'system');
-    
-    const centerSequence = [
-        { joint: 'elbow', value: 45, delay: 2000 },     // e-45
-      { joint: 'shoulder', value: 60, delay: 2000 },  // s-60
-      { joint: 'base', value: 15, delay: 4000 }       // b-30
-    ];
-    
-    sendMovementSequence(centerSequence)
-      .then(() => {
-        addLogEntry('CENTER sequence completed successfully', 'system');
-      })
-      .catch(error => {
-        addLogEntry(`Error executing CENTER sequence: ${error.message}`, 'error');
-      });
-  }
-
-  // Green bin position sequence
-  function moveToGreenSequence() {
-    addLogEntry('Starting GREEN sequence', 'system');
-    
-    const greenSequence = [
-      { joint: 'base', value: 15, delay: 4000 },      // b-30
-
-      { joint: 'shoulder', value: 140, delay: 1000 }, // s-140
-      { joint: 'elbow', value: 25, delay: 2000 },     // e-25
-      { joint: 'gripper', value: 90, delay: 2800 },   // g-90
-
-      { joint: 'elbow', value: 45, delay: 2000 },     // e-45
-      { joint: 'shoulder', value: 60, delay: 1000 },  // s-60
-
-      { joint: 'base', value: 150, delay: 1500 },      // b-150
-
-      { joint: 'shoulder', value: 140, delay: 1000 }, // s-140
-      { joint: 'elbow', value: 25, delay: 2000 },     // e-25
-      { joint: 'gripper', value: 90, delay: 2800 },   // g-90
-      { joint: 'elbow', value: 45, delay: 2000 },     // e-45
-      { joint: 'shoulder', value: 60, delay: 2000 },  // s-60
-      { joint: 'base', value: 15, delay: 4000 }       // b-30
-    ];
-    
-    sendMovementSequence(greenSequence)
-      .then(() => {
-        addLogEntry('GREEN sequence completed successfully', 'system');
-      })
-      .catch(error => {
-        addLogEntry(`Error executing GREEN sequence: ${error.message}`, 'error');
-      });
-  }
-
-  // Blue bin position sequence
-  function moveToBlueSequence() {
-    addLogEntry('Starting BLUE sequence', 'system');
-    
-    const blueSequence = [
-    { joint: 'base', value: 15, delay: 4000 },      // b-30
-
-      { joint: 'shoulder', value: 140, delay: 1000 }, // s-140
-      { joint: 'elbow', value: 25, delay: 2000 },     // e-25
-      { joint: 'gripper', value: 90, delay: 2800 },   // g-90
-
-      { joint: 'elbow', value: 45, delay: 2000 },     // e-45
-      { joint: 'shoulder', value: 60, delay: 1000 },  // s-60
-      
-      { joint: 'base', value: 120, delay: 1500 },      // b-90
-
-      { joint: 'shoulder', value: 140, delay: 1000 }, // s-130
-      { joint: 'elbow', value: 25, delay: 2000 },     // e-25
-      { joint: 'gripper', value: 90, delay: 2800 },   // g-90
-      { joint: 'elbow', value: 45, delay: 2000 },     // e-45
-      { joint: 'shoulder', value: 60, delay: 2000 },  // s-60
-      { joint: 'base', value: 15, delay: 4000 }       // b-30
-    ];
-    
-    sendMovementSequence(blueSequence)
-      .then(() => {
-        addLogEntry('BLUE sequence completed successfully', 'system');
-      })
-      .catch(error => {
-        addLogEntry(`Error executing BLUE sequence: ${error.message}`, 'error');
-      });
-  }
-
-  // Your existing RED sequence function - shown here for completeness
-  function moveToRedSequence() {
-    addLogEntry('Starting custom RED sequence', 'system');
-    
-    // Define the sequence steps with timing
-    const redSequence = [
-      { joint: 'base', value: 15, delay: 4000 },      // b-30
-
-      { joint: 'shoulder', value: 140, delay: 1000 }, // s-140
-      { joint: 'elbow', value: 25, delay: 2000 },     // e-25
-      { joint: 'gripper', value: 90, delay: 2800 },   // g-90
-
-      { joint: 'elbow', value: 45, delay: 2000 },     // e-45
-      { joint: 'shoulder', value: 60, delay: 1000 },  // s-60
-      
-      { joint: 'base', value: 90, delay: 1500 },      // b-90
-
-      { joint: 'shoulder', value: 140, delay: 1000 }, // s-130
-      { joint: 'elbow', value: 25, delay: 2000 },     // e-25
-      { joint: 'gripper', value: 90, delay: 2800 },   // g-90
-      { joint: 'elbow', value: 45, delay: 2000 },     // e-45
-      { joint: 'shoulder', value: 60, delay: 2000 },  // s-60
-      { joint: 'base', value: 15, delay: 4000 }       // b-30
-    ];
-    
-    // Send the sequence to the ESP32
-    sendMovementSequence(redSequence)
-      .then(() => {
-        addLogEntry('RED sequence sent successfully', 'system');
-      })
-      .catch(error => {
-        addLogEntry(`Error sending RED sequence: ${error.message}`, 'error');
-      });
-  }
-});
+}

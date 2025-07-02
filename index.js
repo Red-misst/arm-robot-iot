@@ -206,73 +206,7 @@ function broadcastFrameToBrowsers(frameBuffer) {
   
 }
 
-// Enhanced detection handling for robot
-const sendDetectionToRobot = (detectionData) => {
-  if (!clients.robot || clients.robot.readyState !== WebSocket.OPEN) {
-    console.log("Robot not connected, cannot send detection");
-    
-    // Notify browsers about missing robot connection
-    broadcastToBrowsers({
-      type: 'service_warning',
-      service: 'robot',
-      message: 'Robot not connected - cannot send detection command',
-      timestamp: Date.now()
-    });
-    
-    return;
-  }
-  
-  // Extract the most confident detection
-  let dominantColor = 'unknown';
-  let confidence = 0;
-  
-  if (detectionData.detections && detectionData.detections.length > 0) {
-    const detection = detectionData.detections[0];
-    dominantColor = detection.color.toLowerCase();
-    confidence = detection.confidence || 0;
-    
-    // Store detection in history
-    const detectionRecord = {
-      color: dominantColor,
-      confidence: confidence,
-      timestamp: Date.now(),
-      area: detection.area || 0
-    };
-    
-    detectionHistory.unshift(detectionRecord);
-    if (detectionHistory.length > MAX_DETECTION_HISTORY) {
-      detectionHistory.pop();
-    }
-    
-    lastDetection = detectionRecord;
-  }
-  
-  // Only send to robot if confidence is above threshold
-  if (confidence > 0.5 && aiControlEnabled) {
-    const robotMessage = {
-      detection: {
-        color: dominantColor,
-        confidence: confidence,
-        timestamp: new Date().toISOString()
-      }
-    };
-    
-    try {
-      clients.robot.send(JSON.stringify(robotMessage));
-      console.log(`Sent detection to robot: ${dominantColor} (confidence: ${confidence.toFixed(3)})`);
-    } catch (error) {
-      console.error('Error sending detection to robot:', error);
-      
-      // Notify browsers about the error
-      broadcastToBrowsers({
-        type: 'service_error',
-        service: 'robot',
-        message: `Failed to send detection to robot: ${error.message}`,
-        timestamp: Date.now()
-      });
-    }
-  }
-};
+
 
 // Handle WebSocket connections
 wss.on('connection', (ws, req) => {
@@ -396,6 +330,7 @@ wss.on('connection', (ws, req) => {
     try {
       // Check if message is binary (Buffer) or text (String)
       if (Buffer.isBuffer(message)) {
+       
         // Handle binary data (like camera frames)
         if (clientType === 'camera') {
        
@@ -416,6 +351,90 @@ wss.on('connection', (ws, req) => {
               aiProcessHealth.lastError = aiError.message;
             }
           }
+        } else if (clientType === 'ai') {
+          // Handle binary data from AI
+       
+          const data = JSON.parse(message.toString());
+          switch (data.type) {
+                 case 'detection':
+            // Handle AI detection results
+            if (clientType === 'ai') {
+              console.log(`Received AI detection: ${data.detections?.length || 0} objects`);
+              
+              // Update AI health
+              aiProcessHealth.lastHeartbeat = Date.now();
+              
+              // Process detections if present
+              if (data.detections && data.detections.length > 0) {
+                // Get highest confidence detection
+                const detection = data.detections.sort((a, b) => b.confidence - a.confidence)[0];
+                
+                // Skip if color not specified or not one of our target colors
+                if (!detection.color || !['red', 'green', 'blue'].includes(detection.color.toLowerCase())) {
+                  console.log(`Ignoring detection with invalid color: ${detection.color}`);
+                  break;
+                }
+                
+                // Check for duplicate (same color within last 3 seconds)
+                const now = Date.now();
+                const isDuplicate = detectionHistory.some(d => 
+                  d.color === detection.color && 
+                  (now - d.timestamp) < 3000
+                );
+                
+                if (!isDuplicate) {
+                  console.log(`New detection: ${detection.color} with confidence ${detection.confidence}`);
+                  
+                  // Record this detection
+                  const detectionRecord = {
+                    color: detection.color,
+                    confidence: detection.confidence,
+                    timestamp: now,
+                    area: detection.area || 0
+                  };
+                  
+                  // Add to history and trim if needed
+                  detectionHistory.unshift(detectionRecord);
+                  if (detectionHistory.length > MAX_DETECTION_HISTORY) {
+                    detectionHistory.pop();
+                  }
+                  
+                  // Save as last detection
+                  lastDetection = detection;
+                  
+                  // Log detection to file
+                  logDetection(detection);
+                } else {
+                  console.log(`Ignoring duplicate ${detection.color} detection`);
+                  break;
+                }
+              }
+              
+              // Broadcast to browsers with enhanced data
+              const enhancedDetection = {
+                ...data,
+                aiHealth: aiProcessHealth.status,
+                processingEnabled: aiControlEnabled
+              };
+              broadcastToBrowsers(enhancedDetection);
+              
+              // Send to robot if enabled
+              if (aiControlEnabled && lastDetection) {
+                // Send color-specific command to browser clients to trigger sequence
+                console.log(`Triggering sequence for color: ${lastDetection.color}`);
+                broadcastToBrowsers({
+                  type: 'execute_sequence',
+                  color: lastDetection.color.toLowerCase(),
+                  timestamp: Date.now()
+                });
+              }
+            }
+            break;
+           default:
+            
+            break; 
+          }
+
         }
       } else {
         // Handle text messages (usually JSON)
@@ -449,28 +468,7 @@ wss.on('connection', (ws, req) => {
             }
             break;
             
-          case 'detection':
-            // Handle AI detection results
-            if (clientType === 'ai') {
-              console.log(`Received AI detection: ${data.detections?.length || 0} objects`);
-              
-              // Update AI health
-              aiProcessHealth.lastHeartbeat = Date.now();
-              
-              // Broadcast to browsers with enhanced data
-              const enhancedDetection = {
-                ...data,
-                aiHealth: aiProcessHealth.status,
-                processingEnabled: aiControlEnabled
-              };
-              broadcastToBrowsers(enhancedDetection);
-              
-              // Send to robot if enabled
-              if (aiControlEnabled) {
-                sendDetectionToRobot(data);
-              }
-            }
-            break;
+    
             
           case 'ai_statistics':
             if (clientType === 'ai') {
