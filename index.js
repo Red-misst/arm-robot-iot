@@ -72,6 +72,9 @@ let aiProcessHealth = {
 let lastDetection = null;
 let detectionHistory = [];
 const MAX_DETECTION_HISTORY = 50;
+let isExecutingSequence = false;  // Add sequence execution tracking
+let lastSequenceTime = 0;
+const SEQUENCE_COOLDOWN = 4000;  // 8 seconds between sequences
 
 // Start the AI vision process with improved monitoring
 let aiProcess = null;
@@ -356,81 +359,112 @@ wss.on('connection', (ws, req) => {
        
           const data = JSON.parse(message.toString());
           switch (data.type) {
-                 case 'detection':
-            // Handle AI detection results
-            if (clientType === 'ai') {
-              console.log(`Received AI detection: ${data.detections?.length || 0} objects`);
+             case 'detection':
+          // Handle AI detection results
+          if (clientType === 'ai') {
+            console.log(`Received AI detection: ${data.detections?.length || 0} objects`);
+            
+            // Update AI health
+            aiProcessHealth.lastHeartbeat = Date.now();
+            
+            // Process detections if present
+            if (data.detections && data.detections.length > 0) {
+              // Get highest confidence detection
+              const detection = data.detections.sort((a, b) => b.confidence - a.confidence)[0];
               
-              // Update AI health
-              aiProcessHealth.lastHeartbeat = Date.now();
-              
-              // Process detections if present
-              if (data.detections && data.detections.length > 0) {
-                // Get highest confidence detection
-                const detection = data.detections.sort((a, b) => b.confidence - a.confidence)[0];
-                
-                // Skip if color not specified or not one of our target colors
-                if (!detection.color || !['red', 'green', 'blue'].includes(detection.color.toLowerCase())) {
-                  console.log(`Ignoring detection with invalid color: ${detection.color}`);
-                  break;
-                }
-                
-                // Check for duplicate (same color within last 3 seconds)
-                const now = Date.now();
-                const isDuplicate = detectionHistory.some(d => 
-                  d.color === detection.color && 
-                  (now - d.timestamp) < 3000
-                );
-                
-                if (!isDuplicate) {
-                  console.log(`New detection: ${detection.color} with confidence ${detection.confidence}`);
-                  
-                  // Record this detection
-                  const detectionRecord = {
-                    color: detection.color,
-                    confidence: detection.confidence,
-                    timestamp: now,
-                    area: detection.area || 0
-                  };
-                  
-                  // Add to history and trim if needed
-                  detectionHistory.unshift(detectionRecord);
-                  if (detectionHistory.length > MAX_DETECTION_HISTORY) {
-                    detectionHistory.pop();
-                  }
-                  
-                  // Save as last detection
-                  lastDetection = detection;
-                  
-                  // Log detection to file
-                  logDetection(detection);
-                } else {
-                  console.log(`Ignoring duplicate ${detection.color} detection`);
-                  break;
-                }
+              // Skip if color not specified or not one of our target colors
+              if (!detection.color || !['red', 'green', 'blue'].includes(detection.color.toLowerCase())) {
+                console.log(`Ignoring detection with invalid color: ${detection.color}`);
+                break;
               }
               
-              // Broadcast to browsers with enhanced data
-              const enhancedDetection = {
-                ...data,
-                aiHealth: aiProcessHealth.status,
-                processingEnabled: aiControlEnabled
-              };
-              broadcastToBrowsers(enhancedDetection);
+              // Enhanced duplicate checking and sequence management
+              const now = Date.now();
               
-              // Send to robot if enabled
-              if (aiControlEnabled && lastDetection) {
-                // Send color-specific command to browser clients to trigger sequence
-                console.log(`Triggering sequence for color: ${lastDetection.color}`);
-                broadcastToBrowsers({
-                  type: 'execute_sequence',
-                  color: lastDetection.color.toLowerCase(),
-                  timestamp: Date.now()
-                });
+              // Check if we're currently executing a sequence
+              if (isExecutingSequence) {
+                console.log(`Ignoring detection - sequence already in progress`);
+                break;
+              }
+              
+              // Check cooldown period between sequences
+              if (now - lastSequenceTime < SEQUENCE_COOLDOWN) {
+                console.log(`Ignoring detection - sequence cooldown active (${Math.ceil((SEQUENCE_COOLDOWN - (now - lastSequenceTime)) / 1000)}s remaining)`);
+                break;
+              }
+              
+              // Check for duplicate (same color within last 5 seconds)
+              const isDuplicate = detectionHistory.some(d => 
+                d.color === detection.color && 
+                (now - d.timestamp) < 5000
+              );
+              
+              if (!isDuplicate) {
+                console.log(`New detection: ${detection.color} with confidence ${detection.confidence} at position (${detection.center_x}, ${detection.center_y})`);
+                
+                // Record this detection
+                const detectionRecord = {
+                  color: detection.color,
+                  confidence: detection.confidence,
+                  timestamp: now,
+                  area: detection.area || 0,
+                  center_x: detection.center_x || 0,
+                  center_y: detection.center_y || 0
+                };
+                
+                // Add to history and trim if needed
+                detectionHistory.unshift(detectionRecord);
+                if (detectionHistory.length > MAX_DETECTION_HISTORY) {
+                  detectionHistory.pop();
+                }
+                
+                // Save as last detection
+                lastDetection = detection;
+                
+                // Log detection to file
+                logDetection(detection);
+                
+                // Send to robot if enabled and not already executing
+                if (aiControlEnabled && !isExecutingSequence) {
+                  console.log(`Triggering sequence for color: ${detection.color}`);
+                  isExecutingSequence = true;
+                  lastSequenceTime = now;
+                  
+                  // Broadcast sequence execution to browsers
+                  broadcastToBrowsers({
+                    type: 'execute_sequence',
+                    color: detection.color.toLowerCase(),
+                    timestamp: now,
+                    detection_id: `${detection.color}_${now}`
+                  });
+                  
+                  // Reset sequence flag after estimated completion time
+                  setTimeout(() => {
+                    isExecutingSequence = false;
+                    console.log('Sequence execution flag reset');
+                  }, 25000); // 25 seconds for sequence completion
+                }
+              } else {
+                console.log(`Ignoring duplicate ${detection.color} detection`);
+                break;
               }
             }
-            break;
-           default:
+            
+            // Broadcast enhanced detection data to browsers (always send for UI updates)
+            const enhancedDetection = {
+              ...data,
+              aiHealth: aiProcessHealth.status,
+              processingEnabled: aiControlEnabled,
+              sequenceStatus: {
+                isExecuting: isExecutingSequence,
+                lastSequenceTime: lastSequenceTime,
+                cooldownRemaining: Math.max(0, SEQUENCE_COOLDOWN - (Date.now() - lastSequenceTime))
+              }
+            };
+            broadcastToBrowsers(enhancedDetection);
+          }
+          break;
+                default:
             
             break; 
           }

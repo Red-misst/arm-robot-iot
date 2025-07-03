@@ -5,6 +5,7 @@ import json
 import logging
 import websocket
 from threading import Thread
+import math
 
 # Configure logging - only show INFO level and above
 logging.basicConfig(
@@ -41,6 +42,11 @@ class AIVisionProcessor:
         # Detection settings
         self.min_area = 500  # Minimum contour area to consider
         self.min_confidence = 0.6  # Minimum confidence to report
+        
+        # Duplicate detection prevention by position
+        self.recent_detections = []  # Store recent detections with positions
+        self.position_threshold = 50  # Pixels distance threshold for duplicate detection
+        self.detection_timeout = 5.0  # Seconds to remember a detection position
         
         # Initialize connection
         self.connect()
@@ -93,7 +99,7 @@ class AIVisionProcessor:
             # Process JSON messages
             try:
                 data = json.loads(message)
-                if data.get("type") == "ai_control":
+                if data.get("type") == "control_status":
                     self.processing_enabled = data.get("enabled", True)
                     logger.info(f"AI processing {'enabled' if self.processing_enabled else 'disabled'}")
             except:
@@ -118,10 +124,38 @@ class AIVisionProcessor:
         nparr = np.frombuffer(binary_data, np.uint8)
         return cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     
+    def calculate_distance(self, pos1, pos2):
+        """Calculate Euclidean distance between two positions"""
+        return math.sqrt((pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2)
+    
+    def is_duplicate_by_position(self, center_x, center_y, color):
+        """Check if detection is duplicate based on position and color"""
+        current_time = time.time()
+        
+        # Clean up old detections
+        self.recent_detections = [
+            det for det in self.recent_detections 
+            if current_time - det['timestamp'] <= self.detection_timeout
+        ]
+        
+        # Check if current detection is too close to recent ones
+        for recent_det in self.recent_detections:
+            if recent_det['color'] == color:
+                distance = self.calculate_distance(
+                    (center_x, center_y), 
+                    (recent_det['center_x'], recent_det['center_y'])
+                )
+                if distance < self.position_threshold:
+                    logger.debug(f"Duplicate {color} detection filtered (distance: {distance:.1f}px)")
+                    return True
+        
+        return False
+    
     def detect_colors(self, image):
         """Detect colored objects in image"""
         detections = []
         hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        current_time = time.time()
         
         for color_name, ranges in COLOR_RANGES.items():
             # Create mask by combining all ranges for this color
@@ -154,8 +188,14 @@ class AIVisionProcessor:
                 if confidence < self.min_confidence:
                     continue
                 
-                # Get bounding rectangle
+                # Get bounding rectangle and center
                 x, y, w, h = cv2.boundingRect(contour)
+                center_x = x + w // 2
+                center_y = y + h // 2
+                
+                # Check if this detection is a duplicate by position
+                if self.is_duplicate_by_position(center_x, center_y, color_name):
+                    continue
                 
                 # Create detection object
                 detection = {
@@ -163,11 +203,22 @@ class AIVisionProcessor:
                     'confidence': float(confidence),
                     'bbox': [int(x), int(y), int(w), int(h)],
                     'area': float(area),
-                    'class': 'colored_object'
+                    'center_x': center_x,
+                    'center_y': center_y,
+                    'class': 'colored_object',
+                    'timestamp': current_time
                 }
                 detections.append(detection)
                 
-                # Log this detection - ONLY log when we detect something
+                # Record this detection to prevent future duplicates
+                self.recent_detections.append({
+                    'color': color_name,
+                    'center_x': center_x,
+                    'center_y': center_y,
+                    'timestamp': current_time
+                })
+                
+                # Log this detection
                 self.log_detection(detection)
                 
         # Sort by confidence (highest first)
@@ -182,7 +233,7 @@ class AIVisionProcessor:
         current_time = time.time()
         if current_time - self.last_log_time >= 1.0:
             self.last_log_time = current_time
-            logger.info(f"Detected {detection['color']} object with {detection['confidence']:.2f} confidence, area: {detection['area']:.1f}")
+            logger.info(f"New {detection['color']} object at ({detection['center_x']}, {detection['center_y']}) with {detection['confidence']:.2f} confidence")
     
     def process_frame(self, frame_data):
         """Process an incoming camera frame"""
@@ -232,7 +283,8 @@ class AIVisionProcessor:
             'stats': {
                 'frames_processed': self.frames_processed,
                 'detections_made': self.detections_made,
-                'avg_processing_time': avg_time
+                'avg_processing_time': avg_time,
+                'recent_detections_count': len(self.recent_detections)
             },
             'processing_rate': fps,
             'timestamp': time.time()

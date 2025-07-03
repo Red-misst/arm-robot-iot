@@ -677,13 +677,13 @@ function moveToGreenSequence() {
   addLogEntry('Starting GREEN sequence', 'system');
   
   const greenSequence = [
-    { joint: 'base', value: 15, delay: 4000 },      // b-30
+    { joint: 'base', value: 15, delay: 1000 },      // b-30
     { joint: 'shoulder', value: 140, delay: 1000 }, // s-140
-    { joint: 'elbow', value: 25, delay: 2000 },     // e-25
-    { joint: 'gripper', value: 90, delay: 2800 },   // g-90
+    { joint: 'elbow', value: 25, delay: 1500 },     // e-25
+    { joint: 'gripper', value: 90, delay: 1000 },   // g-90
     { joint: 'elbow', value: 45, delay: 2000 },     // e-45
     { joint: 'shoulder', value: 60, delay: 1000 },  // s-60
-    { joint: 'base', value: 150, delay: 1500 },     // b-150
+    { joint: 'base', value: 90, delay: 1500 },      // b-90
     { joint: 'shoulder', value: 140, delay: 1000 }, // s-140
     { joint: 'elbow', value: 25, delay: 2000 },     // e-25
     { joint: 'gripper', value: 90, delay: 2800 },   // g-90
@@ -706,10 +706,10 @@ function moveToBlueSequence() {
   addLogEntry('Starting BLUE sequence', 'system');
   
   const blueSequence = [
-    { joint: 'base', value: 15, delay: 4000 },      // b-30
+    { joint: 'base', value: 15, delay: 1000 },      // b-30
     { joint: 'shoulder', value: 140, delay: 1000 }, // s-140
     { joint: 'elbow', value: 25, delay: 2000 },     // e-25
-    { joint: 'gripper', value: 90, delay: 2800 },   // g-90
+    { joint: 'gripper', value: 90, delay: 1000 },   // g-90
     { joint: 'elbow', value: 45, delay: 2000 },     // e-45
     { joint: 'shoulder', value: 60, delay: 1000 },  // s-60
     { joint: 'base', value: 120, delay: 1500 },     // b-120
@@ -735,14 +735,14 @@ function moveToRedSequence() {
   addLogEntry('Starting RED sequence', 'system');
   
   const redSequence = [
-    { joint: 'base', value: 15, delay: 4000 },      // b-30
+    { joint: 'base', value: 15, delay: 1000 },      // b-30
     { joint: 'shoulder', value: 140, delay: 1000 }, // s-140
     { joint: 'elbow', value: 25, delay: 2000 },     // e-25
-    { joint: 'gripper', value: 90, delay: 2800 },   // g-90
+    { joint: 'gripper', value: 90, delay: 1000 },   // g-90
     { joint: 'elbow', value: 45, delay: 2000 },     // e-45
     { joint: 'shoulder', value: 60, delay: 1000 },  // s-60
-    { joint: 'base', value: 90, delay: 1500 },      // b-90
-    { joint: 'shoulder', value: 140, delay: 1000 }, // s-130
+    { joint: 'base', value: 150, delay: 1500 },     // b-150
+    { joint: 'shoulder', value: 140, delay: 1000 }, // s-140
     { joint: 'elbow', value: 25, delay: 2000 },     // e-25
     { joint: 'gripper', value: 90, delay: 2800 },   // g-90
     { joint: 'elbow', value: 45, delay: 2000 },     // e-45

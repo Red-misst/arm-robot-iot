@@ -48,7 +48,7 @@ struct JointPositions {
 
 // Globals
 WebSocketsClient webSocket;
-JointPositions currentPosition = {90, 90, 45, 0}; // Default startup position
+JointPositions currentPosition = {90, 90, 45, 30}; // Default startup position
 String lastDetectedColor = "";
 
 // Move servo smoothly
